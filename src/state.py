@@ -7,9 +7,10 @@ config/sections.yaml (see src/config.py) and referenced by id (str).
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 ContextSource = Literal["initial_cdc", "user_answer", "rag", "assumption"]
 

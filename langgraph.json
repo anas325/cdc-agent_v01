@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "cdc_agent": "./src/graph.py:build_graph"
+  },
+  "env": "src/.env"
+}

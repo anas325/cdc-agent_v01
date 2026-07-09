@@ -11,3 +11,4 @@ wheels/
 prompt.md
 .env
 .chroma
+.langgraph_api
