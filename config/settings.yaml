@@ -1,0 +1,27 @@
+llm:
+  provider: ollama # ollama | anthropic
+  model: llama3.2:3b
+  base_url: http://localhost:11434
+  # for provider: anthropic, set model to e.g. claude-sonnet-5 and export ANTHROPIC_API_KEY
+  temperature: 0.2
+
+embeddings:
+  provider: ollama # ollama | sentence-transformers
+  model: nomic-embed-text-v2-moe
+  fallback_model: all-MiniLM-L6-v2
+
+loop:
+  max_turns: 15
+  max_questions_per_batch: 3
+  max_questions_per_gap: 2
+
+rag:
+  persist_dir: .chroma
+  source_dir: data/source_docs
+  top_k: 4
+
+quarto:
+  template_path: templates/cdc_template.qmd
+  output_dir: output
+  output_basename: cdc_final
+  target_format: docx

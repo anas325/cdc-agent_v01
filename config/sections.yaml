@@ -1,0 +1,35 @@
+sections:
+  - id: problem
+    title: "Problématique et contexte"
+    description: "Business problem, current situation, stakeholders, why this project exists"
+    required: true
+    template_slot: problem_statement
+    completion_hints:
+      - "Problem is stated in measurable terms"
+      - "Target users/stakeholders are identified"
+
+  - id: functional
+    title: "Spécifications fonctionnelles"
+    description: "Features, user stories, business rules, edge cases"
+    required: true
+    template_slot: functional_spec
+    completion_hints:
+      - "Each feature has acceptance criteria"
+      - "Business rules are explicit, no implicit assumptions"
+
+  - id: technical
+    title: "Spécifications techniques"
+    description: "Architecture, stack, integrations, data model, NFRs (perf, security, scale)"
+    required: true
+    template_slot: technical_spec
+    completion_hints:
+      - "Integration contracts defined"
+      - "NFRs have numbers, not adjectives"
+
+  - id: constraints
+    title: "Contraintes et périmètre"
+    description: "Budget, deadline, out-of-scope items, legal/regulatory constraints"
+    required: false
+    template_slot: constraints
+    completion_hints:
+      - "Out-of-scope is explicit"

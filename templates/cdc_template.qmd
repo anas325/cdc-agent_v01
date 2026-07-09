@@ -1,0 +1,25 @@
+---
+title: "Cahier des Charges"
+subtitle: "{{ project_subtitle }}"
+date: "{{ generation_date }}"
+format:
+  docx:
+    toc: true
+    number-sections: true
+---
+
+# Problématique et contexte
+
+{{ problem_statement }}
+
+# Spécifications fonctionnelles
+
+{{ functional_spec }}
+
+# Spécifications techniques
+
+{{ technical_spec }}
+
+# Contraintes et périmètre
+
+{{ constraints }}
