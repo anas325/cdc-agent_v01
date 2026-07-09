@@ -5,12 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from src.state import LoopSettings, SectionConfig
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT_DIR / "config"
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
 class LLMSettings(BaseModel):
@@ -24,6 +27,7 @@ class EmbeddingSettings(BaseModel):
     provider: str = "ollama"
     model: str = "nomic-embed-text"
     fallback_model: str = "all-MiniLM-L6-v2"
+    base_url: str = "http://localhost:11434"
 
 
 class RagSettings(BaseModel):

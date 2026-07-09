@@ -35,7 +35,7 @@ def _embedding_function(settings=None):
     if emb.provider == "ollama":
         try:
             ef = embedding_functions.OllamaEmbeddingFunction(
-                url=f"{settings.llm.base_url}/api/embeddings", model_name=emb.model
+                url=f"{emb.base_url}/api/embeddings", model_name=emb.model
             )
             ef(["healthcheck"])  # probe: raises if server/model unavailable
             return ef

@@ -7,6 +7,7 @@ agent code should import a provider-specific class directly.
 from __future__ import annotations
 
 import json
+import os
 import re
 from functools import lru_cache
 from typing import TypeVar
@@ -24,6 +25,9 @@ def _build_llm(cfg: LLMSettings, json_mode: bool = False) -> BaseChatModel:
         from langchain_ollama import ChatOllama
 
         kwargs = {"format": "json"} if json_mode else {}
+        api_key = os.environ.get("OLLAMA_API_KEY")
+        if api_key:
+            kwargs["client_kwargs"] = {"headers": {"Authorization": f"Bearer {api_key}"}}
         return ChatOllama(model=cfg.model, base_url=cfg.base_url, temperature=cfg.temperature, **kwargs)
     if cfg.provider == "anthropic":
         from langchain_anthropic import ChatAnthropic

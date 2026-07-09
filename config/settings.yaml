@@ -1,7 +1,8 @@
 llm:
   provider: ollama # ollama | anthropic
-  model: llama3.2:3b
-  base_url: http://localhost:11434
+  model: gpt-oss:20b
+  base_url: https://ollama.com
+  # cloud Ollama: export OLLAMA_API_KEY (from https://ollama.com/settings/keys)
   # for provider: anthropic, set model to e.g. claude-sonnet-5 and export ANTHROPIC_API_KEY
   temperature: 0.2
 
@@ -9,6 +10,7 @@ embeddings:
   provider: ollama # ollama | sentence-transformers
   model: nomic-embed-text-v2-moe
   fallback_model: all-MiniLM-L6-v2
+  base_url: http://localhost:11434 # kept local; cloud Ollama embeddings are not used here
 
 loop:
   max_turns: 15

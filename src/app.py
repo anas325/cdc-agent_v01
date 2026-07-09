@@ -9,6 +9,7 @@ re-reads it instead of trusting in-memory globals.
 
 from __future__ import annotations
 
+import logging
 import sys
 import uuid
 from pathlib import Path
@@ -16,6 +17,10 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+
+# transformers' optional vision submodules import torchvision (not installed);
+# Streamlit's file watcher probes every loaded module and logs that as a warning.
+logging.getLogger("streamlit.watcher.local_sources_watcher").setLevel(logging.ERROR)
 
 import streamlit as st
 from langgraph.types import Command
