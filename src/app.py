@@ -151,7 +151,7 @@ def render_status_table(values: dict) -> None:
         )
 
     st.subheader("État des sections")
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.dataframe(rows, width='stretch', hide_index=True)
 
 
 def render_question_form(questions: list[dict]) -> None:
