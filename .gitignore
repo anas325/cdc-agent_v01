@@ -12,4 +12,7 @@ prompt.md
 .env
 .chroma
 .langgraph_api
+.pytest_cache
+.streamlit
+.claude
 output/*
