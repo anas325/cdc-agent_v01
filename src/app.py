@@ -154,10 +154,13 @@ def render_status_table(values: dict) -> None:
     st.dataframe(rows, width='stretch', hide_index=True)
 
 
-def render_question_form(questions: list[dict]) -> None:
+def render_question_form(questions: list[dict], values: dict) -> None:
     st.subheader("Questions en attente")
+    gaps = values.get("gaps", [])
+    
     with st.form("answer_form"):
         for q in questions:
+            st.write(q['gap_id'])
             st.markdown(f"**{q['text']}**")
             col1, col2 = st.columns([4, 1])
             col1.text_input("Réponse", key=f"answer_{q['gap_id']}", label_visibility="collapsed")
@@ -230,7 +233,7 @@ def main() -> None:
     render_status_table(values)
 
     if st.session_state.pending_questions:
-        render_question_form(st.session_state.pending_questions)
+        render_question_form(st.session_state.pending_questions, values)
     elif st.session_state.finished:
         render_completion(values, settings)
 
