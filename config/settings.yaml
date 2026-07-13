@@ -4,7 +4,7 @@ llm:
   base_url: https://ollama.com
   # cloud Ollama: export OLLAMA_API_KEY (from https://ollama.com/settings/keys)
   # for provider: anthropic, set model to e.g. claude-sonnet-5 and export ANTHROPIC_API_KEY
-  temperature: 0.2
+  temperature: 0
 
 embeddings:
   provider: ollama # ollama | sentence-transformers
