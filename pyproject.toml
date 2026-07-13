@@ -11,6 +11,7 @@ dependencies = [
     "langchain-core>=1.4.9",
     "langchain-ollama>=1.1.0",
     "langgraph>=1.2.8",
+    "langgraph-checkpoint-sqlite>=3.1.0",
     "ollama>=0.6.2",
     "pydantic>=2.13.4",
     "python-dotenv>=1.1.1",
