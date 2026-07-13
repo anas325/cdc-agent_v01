@@ -40,13 +40,41 @@ class GapCandidate(BaseModel):
 class GapFinderOutput(BaseModel):
     new_gaps: list[GapCandidate] = Field(default_factory=list)
     resolved_gap_ids: list[str] = Field(default_factory=list)
-    section_complete: bool | None = None
+    
 
 
 class GapFinderResult(BaseModel):
     new_gaps: list[Gap]
     resolved_gap_ids: list[str]
     section_complete: bool | None
+
+def compute_section_complete(
+    state: CDCState,
+    section_id: str,
+    new_gaps: list[Gap],
+    resolved_gap_ids: list[str],
+) -> bool:
+    """
+    A section is complete iff it has no open blocking/important gaps
+    after applying the latest gap-finder results.
+    """
+
+    remaining_existing = [
+        gap
+        for gap in state["gaps"]
+        if section_id in gap.section_ids
+        and gap.id not in resolved_gap_ids
+        and gap.status != "resolved"
+    ]
+
+    all_open_gaps = remaining_existing + [
+        gap for gap in new_gaps if section_id in gap.section_ids
+    ]
+
+    return not any(
+        gap.severity in {"blocking", "important"}
+        for gap in all_open_gaps
+    )
 
 
 def _build_prompt_section_mode(state: CDCState, section_id: str) -> str:
@@ -77,10 +105,7 @@ section_ids doit alors lister TOUTES les sections concernées).
 
 Ne remonte QUE des lacunes concrètes et actionnables, citant les éléments ambigus du texte.
 N'invente pas de lacune si le contexte répond déjà clairement au critère.
-
-Enfin, indique si la section peut être considérée "complete" : elle ne l'est QUE si elle n'a
-aucune lacune ouverte de sévérité "blocking" ou "important" après cette analyse (en comptant
-les gaps déjà ouverts listés ci-dessus ET les nouveaux que tu identifies)."""
+"""
 
 
 def _build_prompt_fresh_mode(state: CDCState, fresh_item_ids: list[str]) -> str:
@@ -145,9 +170,18 @@ def run_gap_finder(
                 severity=cand.severity,
             )
         )
+    section_complete = None
+
+    if mode == "section":
+        section_complete = compute_section_complete(
+            state=state,
+            section_id=section_id,
+            new_gaps=new_gaps,
+            resolved_gap_ids=output.resolved_gap_ids,
+        )
 
     return GapFinderResult(
         new_gaps=new_gaps,
         resolved_gap_ids=output.resolved_gap_ids,
-        section_complete=output.section_complete if mode == "section" else None,
+        section_complete=section_complete if mode == "section" else None,
     )
