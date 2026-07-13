@@ -25,6 +25,8 @@ def pick_next_section(state: CDCState) -> str | None:
             if not sec.required:
                 continue
             st = statuses.get(sec.id)
+            if st and st.status == "skipped":
+                continue
             if st and st.status == target_status:
                 return sec.id
             if target_status == "empty" and st is None:
@@ -38,7 +40,9 @@ def all_required_complete(state: CDCState) -> bool:
         if not sec.required:
             continue
         st = statuses.get(sec.id)
-        if st is None or st.status != "complete":
+        if st is None or st.status in {"empty", "skipped"}:
+            return False
+        if st.status != "complete":
             return False
     return True
 

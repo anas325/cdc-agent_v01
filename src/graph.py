@@ -54,7 +54,14 @@ def ingest_node(state: CDCState) -> dict:
             )
         )
 
-    section_statuses = {s.id: SectionStatus(section_id=s.id, status="empty") for s in sections}
+    incoming_statuses = state.get("section_statuses") or {}
+    section_statuses = {}
+    for section in sections:
+        existing = incoming_statuses.get(section.id)
+        if existing is not None:
+            section_statuses[section.id] = existing
+        else:
+            section_statuses[section.id] = SectionStatus(section_id=section.id, status="empty")
 
     return {
         "sections_config": sections,

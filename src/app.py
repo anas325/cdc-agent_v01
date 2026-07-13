@@ -25,9 +25,9 @@ logging.getLogger("streamlit.watcher.local_sources_watcher").setLevel(logging.ER
 import streamlit as st
 from langgraph.types import Command
 
-from src.config import load_settings
+from src.config import load_sections, load_settings
 from src.graph import build_graph
-from src.state import LoopSettings
+from src.state import LoopSettings, SectionStatus
 SOURCE_DOCS_DIR = ROOT_DIR / "data" / "source_docs"
 
 STATUS_ICONS = {
@@ -35,6 +35,7 @@ STATUS_ICONS = {
     "in_progress": "🟡",
     "complete": "🟢",
     "reopened": "🔴",
+    "skipped": "⚫",
 }
 
 SEVERITIES = ["blocking", "important", "nice_to_have"]
@@ -102,7 +103,7 @@ def score_section(gaps: list[dict]) -> float:
     return max(0.0, 100 - penalty)
 
 
-def render_sidebar(settings) -> tuple[str, LoopSettings, bool]:
+def render_sidebar(settings) -> tuple[str, LoopSettings, bool, dict[str, bool]]:
     st.sidebar.header("Configuration")
 
     cdc_file = st.sidebar.file_uploader("CDC initial (markdown/texte/PDF)", type=["md", "txt", "pdf"])
@@ -137,6 +138,14 @@ def render_sidebar(settings) -> tuple[str, LoopSettings, bool]:
         "max_questions_per_gap", min_value=1, value=settings.loop.max_questions_per_gap
     )
 
+    st.sidebar.subheader("Sections à ignorer")
+    sections = load_sections()
+    skip_map = {}
+    for sec in sections:
+        if not sec.required:
+            continue
+        skip_map[sec.id] = st.sidebar.checkbox(f"Ignorer : {sec.title}", value=False, key=f"skip_{sec.id}")
+
     start_clicked = st.sidebar.button(
         "Démarrer / Reprendre un nouveau run", disabled=st.session_state.run_active, type="primary"
     )
@@ -146,15 +155,25 @@ def render_sidebar(settings) -> tuple[str, LoopSettings, bool]:
         max_questions_per_batch=int(max_batch),
         max_questions_per_gap=int(max_per_gap),
     )
-    return cdc_text, loop_settings, start_clicked
+    return cdc_text, loop_settings, start_clicked, skip_map
 
 
-def start_run(cdc_text: str, loop_settings: LoopSettings) -> None:
+def start_run(cdc_text: str, loop_settings: LoopSettings, skip_map: dict[str, bool]) -> None:
     st.session_state.thread_id = str(uuid.uuid4())
     st.session_state.run_active = True
     st.session_state.pending_questions = None
     st.session_state.finished = False
-    input_state = {"initial_cdc_text": cdc_text, "loop_settings": loop_settings}
+    sections = load_sections()
+    section_statuses = {
+        sec.id: SectionStatus(section_id=sec.id, status="skipped" if skip_map.get(sec.id) else "empty")
+        for sec in sections
+        if sec.required
+    }
+    input_state = {
+        "initial_cdc_text": cdc_text,
+        "loop_settings": loop_settings,
+        "section_statuses": section_statuses,
+    }
     with st.spinner("Exécution de l'agent swarm..."):
         result = get_graph().invoke(input_state, current_config())
     process_step_result(result)
@@ -260,9 +279,9 @@ def main() -> None:
 
     st.title("CDC Refinement Agent Swarm")
 
-    cdc_text, loop_settings, start_clicked = render_sidebar(settings)
+    cdc_text, loop_settings, start_clicked, skip_map = render_sidebar(settings)
     if start_clicked:
-        start_run(cdc_text, loop_settings)
+        start_run(cdc_text, loop_settings, skip_map)
 
     if not st.session_state.thread_id:
         st.info("Charge un CDC initial (optionnel) et clique sur Démarrer dans la barre latérale.")

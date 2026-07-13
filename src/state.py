@@ -37,7 +37,7 @@ GapStatus = Literal[
     "resolved",
 ]
 
-SectionStatusValue = Literal["empty", "in_progress", "complete", "reopened"]
+SectionStatusValue = Literal["empty", "in_progress", "complete", "reopened", "skipped"]
 
 
 class ContextItem(BaseModel):
