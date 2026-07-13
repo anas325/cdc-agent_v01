@@ -38,6 +38,22 @@ STATUS_ICONS = {
 }
 
 SEVERITIES = ["blocking", "important", "nice_to_have"]
+CATEGORY_WEIGHTS = {
+    "contradiction": 2.0,
+    "scope": 1.5,
+    "functional_ambiguity": 1.4,
+    "business_rule": 1.3,
+    "acceptance_criteria": 1.2,
+    "integration": 1.2,
+    "data_model": 1.2,
+    "nfr": 1.0,
+    "edge_case": 0.8,
+}
+SEVERITY_WEIGHTS = {
+    "blocking": 10,
+    "important": 5,
+    "nice_to_have": 1,
+}
 
 st.set_page_config(page_title="CDC Refinement Agent", layout="wide")
 
@@ -75,6 +91,15 @@ def get_state_values() -> dict:
         return {}
     snapshot = get_graph().get_state(current_config())
     return snapshot.values or {}
+
+
+def score_section(gaps: list[dict]) -> float:
+    penalty = 0.0
+
+    for gap in gaps:
+        penalty += SEVERITY_WEIGHTS[gap["severity"]] * CATEGORY_WEIGHTS[gap["category"]]
+
+    return max(0.0, 100 - penalty)
 
 
 def render_sidebar(settings) -> tuple[str, LoopSettings, bool]:
@@ -140,10 +165,14 @@ def render_status_table(values: dict) -> None:
         status = status_obj.status if status_obj else "empty"
         open_gaps = [g for g in gaps if sec.id in g.section_ids and g.status == "open"]
         counts = {sev: sum(1 for g in open_gaps if g.severity == sev) for sev in SEVERITIES}
+        score = score_section(
+            [{"category": g.category, "severity": g.severity} for g in open_gaps]
+        )
         rows.append(
             {
                 "Section": sec.title,
                 "Statut": f"{STATUS_ICONS.get(status, '')} {status}",
+                "Score": round(score, 1),
                 "Bloquantes": counts["blocking"],
                 "Importantes": counts["important"],
                 "Optionnelles": counts["nice_to_have"],
