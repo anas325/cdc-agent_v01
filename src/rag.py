@@ -8,6 +8,9 @@ from pathlib import Path
 import chromadb
 from chromadb.utils import embedding_functions
 
+
+SUPPORTED_EXTENSIONS = {".md", ".txt", ".pdf"}
+
 from src.config import RagSettings, load_settings
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -54,8 +57,26 @@ def get_collection():
     return client.get_or_create_collection(name=COLLECTION_NAME, embedding_function=ef)
 
 
+def _extract_text_from_path(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in {".md", ".txt"}:
+        return path.read_text(encoding="utf-8", errors="ignore")
+
+    if suffix == ".pdf":
+        try:
+            from pypdf import PdfReader
+        except ImportError as exc:  # pragma: no cover - exercised only when dependency is missing
+            raise RuntimeError("pypdf is required to ingest PDF files") from exc
+
+        reader = PdfReader(str(path))
+        pages = [page.extract_text() or "" for page in reader.pages]
+        return "\n\n".join(page for page in pages if page).strip()
+
+    raise ValueError(f"Unsupported document format: {path.suffix}")
+
+
 def ingest_source_docs(source_dir: Path | None = None) -> int:
-    """(Re)ingest every .md/.txt file under data/source_docs/. Returns count of chunks added."""
+    """(Re)ingest every supported document under data/source_docs/. Returns count of chunks added."""
     settings = load_settings()
     source_dir = source_dir or (ROOT_DIR / settings.rag.source_dir)
     collection = get_collection()
@@ -64,14 +85,26 @@ def ingest_source_docs(source_dir: Path | None = None) -> int:
 
     added = 0
     for path in sorted(Path(source_dir).glob("*")):
-        if path.suffix.lower() not in {".md", ".txt"}:
+        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
+
+        try:
+            text = _extract_text_from_path(path)
+        except (RuntimeError, ValueError):
+            continue
+
+        if not text.strip():
+            continue
+
         for i, chunk in enumerate(_chunk_text(text)):
             chunk_id = f"{path.name}::{i}"
             if chunk_id in existing_ids:
                 continue
-            collection.add(ids=[chunk_id], documents=[chunk], metadatas=[{"source": path.name}])
+            collection.add(
+                ids=[chunk_id],
+                documents=[chunk],
+                metadatas=[{"source": path.name, "file_type": path.suffix.lower()}],
+            )
             added += 1
     return added
 

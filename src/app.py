@@ -105,12 +105,22 @@ def score_section(gaps: list[dict]) -> float:
 def render_sidebar(settings) -> tuple[str, LoopSettings, bool]:
     st.sidebar.header("Configuration")
 
-    cdc_file = st.sidebar.file_uploader("CDC initial (markdown/texte)", type=["md", "txt"])
-    cdc_text = cdc_file.read().decode("utf-8", errors="ignore") if cdc_file is not None else ""
+    cdc_file = st.sidebar.file_uploader("CDC initial (markdown/texte/PDF)", type=["md", "txt", "pdf"])
+    cdc_text = ""
+    if cdc_file is not None:
+        if cdc_file.name.lower().endswith(".pdf"):
+            from src.rag import _extract_text_from_path
+
+            SOURCE_DOCS_DIR.mkdir(parents=True, exist_ok=True)
+            tmp_path = SOURCE_DOCS_DIR / cdc_file.name
+            tmp_path.write_bytes(cdc_file.getvalue())
+            cdc_text = _extract_text_from_path(tmp_path)
+        else:
+            cdc_text = cdc_file.read().decode("utf-8", errors="ignore")
 
     st.sidebar.subheader("Documents source (RAG)")
     source_files = st.sidebar.file_uploader(
-        "Ajouter des documents source", type=["md", "txt"], accept_multiple_files=True
+        "Ajouter des documents source", type=["md", "txt", "pdf"], accept_multiple_files=True
     )
     if source_files:
         SOURCE_DOCS_DIR.mkdir(parents=True, exist_ok=True)
