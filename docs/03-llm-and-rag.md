@@ -84,14 +84,27 @@ caveat as the LLM factory re: settings changes needing a restart.
 
 ### Ingestion
 
-`ingest_source_docs(source_dir=None)` — walks `data/source_docs/*.md` and
-`*.txt` (default source dir, from `settings.rag.source_dir`), chunks each
-file, and adds chunks whose id (`"{filename}::{chunk_index}"`) isn't already
-in the collection. This makes ingestion idempotent/incremental: re-running it
-(as `ingest_node` does at the start of every graph run) only adds genuinely
-new files/chunks, it doesn't re-embed everything. There's no mechanism to
-detect *changed* content in an existing file under the same name+chunk-index
-— editing a source doc without renaming it won't re-index the edited chunk.
+`ingest_source_docs(source_dir=None)` — walks every file under
+`data/source_docs/` (default source dir, from `settings.rag.source_dir`)
+whose extension is in `SUPPORTED_EXTENSIONS` (`.md`, `.txt`, `.pdf`), chunks
+each file, and adds chunks whose id (`"{filename}::{chunk_index}"`) isn't
+already in the collection. This makes ingestion idempotent/incremental:
+re-running it (as `ingest_node` does at the start of every graph run) only
+adds genuinely new files/chunks, it doesn't re-embed everything. There's no
+mechanism to detect *changed* content in an existing file under the same
+name+chunk-index — editing a source doc without renaming it won't re-index
+the edited chunk.
+
+Text extraction is dispatched by `_extract_text_from_path()`: `.md`/`.txt`
+are read directly as UTF-8; `.pdf` is parsed page-by-page with `pypdf`
+(`PdfReader`, imported lazily so `pypdf` is only required when a PDF is
+actually ingested) and the pages joined with blank lines. A file that fails
+extraction (`RuntimeError`/`ValueError`, e.g. `pypdf` missing or an
+unsupported suffix) or that yields no extractable text is silently skipped
+rather than aborting the whole ingestion run. Each chunk's metadata also now
+carries `file_type` (the lowercased suffix) alongside `source`. The same
+`_extract_text_from_path()` helper is reused directly by the Streamlit
+sidebar to read an uploaded PDF CDC (see [Streamlit UI](05-streamlit-ui.md)).
 
 ### Retrieval
 

@@ -109,13 +109,18 @@ class SectionConfig(BaseModel):        # from config/sections.yaml, static per r
 
 class SectionStatus(BaseModel):        # dynamic, tracked in CDCState
     section_id: str
-    status: Literal["empty", "in_progress", "complete", "reopened"] = "empty"
+    status: Literal["empty", "in_progress", "complete", "reopened", "skipped"] = "empty"
     reopen_reason: str | None = None
 ```
 
 A section is `complete` only when it has zero open `blocking` or `important`
 gaps. It becomes `reopened` if the critic later finds that new information
-contradicts it — see [critic](02-graph-and-agents.md#critic).
+contradicts it — see [critic](02-graph-and-agents.md#critic). `skipped` is set
+before the run even starts, from the Streamlit sidebar's "Sections à ignorer"
+checkboxes (see [Streamlit UI](05-streamlit-ui.md)) — the orchestrator treats
+a skipped section as neither pickable nor eligible for
+`all_required_complete()`, so it's excluded from the run without being
+counted as done.
 
 ### `AskedQuestion` / `PendingQuestion`
 

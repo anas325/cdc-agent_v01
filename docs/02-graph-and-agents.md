@@ -46,7 +46,10 @@ Runs once at the start of a run. Loads `sections.yaml` and `settings.yaml`
 `data/source_docs/` into Chroma, seeds `context_items` with the user-supplied
 initial CDC text (if any, tagged `source="initial_cdc"`, attached to every
 section since it's unstructured input), and initializes every section's
-status to `empty`.
+status to `empty` — unless the caller already passed in a `section_statuses`
+entry for it (e.g. `status="skipped"`, set by the Streamlit sidebar before
+`invoke()`), in which case the incoming status is kept as-is rather than
+overwritten.
 
 ### `orchestrator` (agent: [`src/agents/orchestrator.py`](../src/agents/orchestrator.py))
 
@@ -65,8 +68,16 @@ order each turn:
 3. **Loop limits** (see below).
 4. **Pick next section** — `pick_next_section()`: scans required sections in
    priority order `reopened > in_progress > empty` (config order within each
-   bucket). Returns `None` once everything required is `complete`, which
-   routes to `synthesizer`.
+   bucket), skipping any section whose status is `skipped`. Returns `None`
+   once everything required is `complete` (or `skipped`), which routes to
+   `synthesizer`.
+
+Note the asymmetry with `all_required_complete()` (a standalone helper, not
+currently wired into `route_after_orchestrator` — routing to `synthesizer`
+actually happens via `pick_next_section()` returning `None`): it treats
+`skipped` the same as `empty` and returns `False` if any required section has
+either status. So `pick_next_section` alone is what lets a run with skipped
+sections reach synthesis.
 
 #### Loop limits
 

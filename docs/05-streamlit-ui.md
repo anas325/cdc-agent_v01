@@ -40,27 +40,41 @@ finished: bool                  # True once the graph reached done=True
 
 ### 1. Sidebar — `render_sidebar(settings)`
 
-- CDC file uploader (`.md`/`.txt`) → read as text, passed as
+- CDC file uploader (`.md`/`.txt`/`.pdf`) → `.md`/`.txt` are read as text
+  directly; a `.pdf` is first written into `data/source_docs/` and then
+  extracted via `rag._extract_text_from_path()` (see
+  [LLM & RAG](03-llm-and-rag.md#ingestion)). Either way the result becomes
   `initial_cdc_text` on run start.
-- Source-doc uploader (multiple `.md`/`.txt`) → written directly into
+- Source-doc uploader (multiple `.md`/`.txt`/`.pdf`) → written directly into
   `data/source_docs/`. Note: this does **not** trigger ingestion
   immediately — files are only (re-)indexed the next time a run starts,
   since `ingest_source_docs()` runs inside the graph's `ingest` node.
 - Loop-setting number inputs (`max_turns`, `max_questions_per_batch`,
   `max_questions_per_gap`), defaulting to `settings.loop.*` from
   `config/settings.yaml` but overridable per run.
+- "Sections à ignorer" — one checkbox per required section (from
+  `load_sections()`), unchecked by default. Returned as `skip_map`
+  (`section_id -> bool`) and consumed by `start_run` to pre-seed those
+  sections as `skipped` so the orchestrator never picks them (see
+  [Graph & Agents](02-graph-and-agents.md#orchestrator)).
 - "Démarrer / Reprendre un nouveau run" button — disabled while
   `run_active` is true (i.e. mid-invoke) to prevent double-submission.
 
-### 2. Starting a run — `start_run(cdc_text, loop_settings)`
+### 2. Starting a run — `start_run(cdc_text, loop_settings, skip_map)`
 
 Mints a fresh `thread_id` (so every "Démarrer" click starts an unrelated new
 run — this button does not resume an existing thread despite its label;
 resuming happens implicitly by *not* clicking it and just reloading the
-page while `thread_id` is still set), then:
+page while `thread_id` is still set), then builds an initial
+`section_statuses` dict — every required section is seeded `"skipped"` if
+`skip_map` marked it, otherwise `"empty"` — before invoking:
 
 ```python
-input_state = {"initial_cdc_text": cdc_text, "loop_settings": loop_settings}
+input_state = {
+    "initial_cdc_text": cdc_text,
+    "loop_settings": loop_settings,
+    "section_statuses": section_statuses,
+}
 result = get_graph().invoke(input_state, current_config())
 ```
 
@@ -95,10 +109,16 @@ render_turn_log(values)          # always, appended-to across turns
 ```
 
 - **`render_status_table`** — one row per configured section: status
-  (emoji + label — ⚪ empty, 🟡 in_progress, 🟢 complete, 🔴 reopened) and
-  open-gap counts broken down by severity (blocking / important /
-  nice_to_have). Rebuilt fresh from `section_statuses` + `gaps` every
-  rerun — no separate UI-side bookkeeping.
+  (emoji + label — ⚪ empty, 🟡 in_progress, 🟢 complete, 🔴 reopened,
+  ⚫ skipped), a `Score` column, and open-gap counts broken down by severity
+  (blocking / important / nice_to_have). Rebuilt fresh from
+  `section_statuses` + `gaps` every rerun — no separate UI-side bookkeeping.
+  `score_section(gaps)` starts at 100 and subtracts, per open gap,
+  `SEVERITY_WEIGHTS[severity] * CATEGORY_WEIGHTS[category]` (severity ranges
+  10/5/1 for blocking/important/nice_to_have; category multiplies that by
+  0.8–2.0, contradiction weighted highest), floored at 0 — a quick at-a-glance
+  proxy for how "risky" a section still is, purely a UI computation with no
+  effect on routing.
 - **`render_question_form`** — one text input + "je ne sais pas" checkbox
   per pending question, inside a single `st.form` (so all answers submit
   together, matching the batching the orchestrator already enforces). On
