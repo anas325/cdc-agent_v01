@@ -96,6 +96,7 @@ class SectionConfig(BaseModel):
     required: bool = True
     template_slot: str
     completion_hints: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
 
 
 class LoopSettings(BaseModel):

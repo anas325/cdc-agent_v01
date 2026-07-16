@@ -7,6 +7,13 @@ sections:
     completion_hints:
       - "Problem is stated in measurable terms"
       - "Target users/stakeholders are identified"
+    aliases:
+      - "Contexte"
+      - "Contexte et problématique"
+      - "Présentation du projet"
+      - "Introduction"
+      - "Objet du document"
+      - "Enjeux"
 
   - id: functional
     title: "Spécifications fonctionnelles"
@@ -16,6 +23,11 @@ sections:
     completion_hints:
       - "Each feature has acceptance criteria"
       - "Business rules are explicit, no implicit assumptions"
+    aliases:
+      - "Spécifications fonctionnelles détaillées"
+      - "Besoins fonctionnels"
+      - "Exigences fonctionnelles"
+      - "Fonctionnalités"
 
   - id: technical
     title: "Spécifications techniques"
@@ -25,6 +37,12 @@ sections:
     completion_hints:
       - "Integration contracts defined"
       - "NFRs have numbers, not adjectives"
+    aliases:
+      - "Spécifications techniques détaillées"
+      - "Besoins techniques"
+      - "Exigences techniques"
+      - "Architecture technique"
+      - "Contraintes techniques"
 
   - id: constraints
     title: "Contraintes et périmètre"
@@ -33,3 +51,10 @@ sections:
     template_slot: constraints
     completion_hints:
       - "Out-of-scope is explicit"
+    aliases:
+      - "Périmètre"
+      - "Périmètre du projet"
+      - "Contraintes"
+      - "Contraintes et exclusions"
+      - "Hors périmètre"
+      - "Budget et délais"
