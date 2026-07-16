@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from src.context_utils import format_all_sections_context, format_asked_questions
+from src.context_utils import format_asked_questions, format_context_for_sections
 from src.ids import new_id
 from src.llm import call_structured
 from src.state import AskedQuestion, CDCState, Gap, PendingQuestion, SectionStatus
@@ -91,8 +91,8 @@ LACUNE : {gap.description}
 
 QUESTION CANDIDATE : "{candidate_question}"
 
-CONTEXTE DÉJÀ DISPONIBLE :
-{format_all_sections_context(state)}
+CONTEXTE DÉJÀ DISPONIBLE (sections concernées par la lacune) :
+{format_context_for_sections(state, gap.section_ids)}
 
 QUESTIONS DÉJÀ POSÉES PRÉCÉDEMMENT :
 {format_asked_questions(state)}

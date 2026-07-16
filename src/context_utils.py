@@ -20,11 +20,42 @@ def format_context_items(items: list[ContextItem], section_id: str | None = None
 
 
 def format_all_sections_context(state: CDCState) -> str:
-    sections: list[SectionConfig] = state["sections_config"]
-    items = state["context_items"]
+    """Render every context item exactly once, grouped by section.
+
+    Single-section items go under their section's block; multi-section and
+    untagged items go under a final shared block (each line already prints
+    its `sections=[...]` scope).
+    """
+    return _format_sections_blocks(state["sections_config"], state["context_items"])
+
+
+def format_context_for_sections(state: CDCState, section_ids: list[str]) -> str:
+    """Render only the context relevant to `section_ids` (plus shared items).
+
+    Falls back to the full view when `section_ids` is empty; unknown ids are
+    ignored (gap section_ids come from LLM output and may be invalid).
+    """
+    wanted = set(section_ids)
+    sections = [s for s in state["sections_config"] if s.id in wanted]
+    if not sections:
+        return format_all_sections_context(state)
+    items = [
+        it
+        for it in state["context_items"]
+        if not it.section_ids or wanted & set(it.section_ids)
+    ]
+    return _format_sections_blocks(sections, items)
+
+
+def _format_sections_blocks(sections: list[SectionConfig], items: list[ContextItem]) -> str:
     blocks = []
     for sec in sections:
-        blocks.append(f"### Section: {sec.title} (id={sec.id})\n{format_context_items(items, sec.id)}")
+        own = [it for it in items if it.section_ids == [sec.id]]
+        blocks.append(f"### Section: {sec.title} (id={sec.id})\n{format_context_items(own)}")
+    shared = [it for it in items if len(it.section_ids) != 1]
+    blocks.append(
+        f"### Contexte transversal / général (plusieurs sections ou non classé)\n{format_context_items(shared)}"
+    )
     return "\n\n".join(blocks)
 
 

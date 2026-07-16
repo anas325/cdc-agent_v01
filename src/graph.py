@@ -24,6 +24,7 @@ from src.config import load_sections, load_settings
 from src.ids import new_id
 from src.rag import ingest_source_docs
 from src.state import CDCState, ContextItem, PendingQuestion, SectionStatus, TurnLogEntry
+from src.utils.cdc_sections import split_cdc_by_sections
 
 
 def _log(state: CDCState, agent: str, summary: str, **details) -> TurnLogEntry:
@@ -36,23 +37,64 @@ def _log(state: CDCState, agent: str, summary: str, **details) -> TurnLogEntry:
 
 
 def ingest_node(state: CDCState) -> dict:
+    """Load config, ingest RAG docs, and seed context from the initial CDC.
+
+    The CDC is split per section (see split_cdc_by_sections) so each section
+    gets its own context item — downstream prompts then only carry the slices
+    they need instead of the whole document. Unmatched chunks (preamble,
+    unrecognized headings) become untagged items (section_ids=[]): visible in
+    every LLM context, but not synthesized into any section — the final
+    validator reports them as unmapped. If no section heading is recognized,
+    the whole document is kept as one item tagged with all sections.
+    """
     settings = load_settings()
     sections = load_sections()
     ingest_source_docs()
 
     initial_text = state.get("initial_cdc_text", "") or ""
     context_items: list[ContextItem] = []
+    ingest_details: dict = {}
     if initial_text.strip():
-        context_items.append(
-            ContextItem(
-                id=new_id("ctx"),
-                content=initial_text.strip(),
-                source="initial_cdc",
-                section_ids=[s.id for s in sections],
-                turn_added=0,
-                fresh=False,
+        split = split_cdc_by_sections(initial_text, sections)
+        if split.matched_any:
+            for sid, text in split.sections.items():
+                context_items.append(
+                    ContextItem(
+                        id=new_id("ctx"),
+                        content=text,
+                        source="initial_cdc",
+                        section_ids=[sid],
+                        turn_added=0,
+                        fresh=False,
+                    )
+                )
+            for chunk in split.unmatched:
+                context_items.append(
+                    ContextItem(
+                        id=new_id("ctx"),
+                        content=chunk,
+                        source="initial_cdc",
+                        section_ids=[],
+                        turn_added=0,
+                        fresh=False,
+                    )
+                )
+            ingest_details = {
+                "matched_sections": list(split.sections),
+                "unmatched_chunks": len(split.unmatched),
+            }
+        else:
+            context_items.append(
+                ContextItem(
+                    id=new_id("ctx"),
+                    content=initial_text.strip(),
+                    source="initial_cdc",
+                    section_ids=[s.id for s in sections],
+                    turn_added=0,
+                    fresh=False,
+                )
             )
-        )
+            ingest_details = {"matched_sections": [], "unmatched_chunks": 0}
 
     incoming_statuses = state.get("section_statuses") or {}
     section_statuses = {}
@@ -70,7 +112,14 @@ def ingest_node(state: CDCState) -> dict:
         "gaps": [],
         "section_statuses": section_statuses,
         "asked_questions": [],
-        "turn_log": [_log(state, "ingest", f"Chargement du CDC initial et ingestion RAG ({len(sections)} sections).")],
+        "turn_log": [
+            _log(
+                state,
+                "ingest",
+                f"Chargement du CDC initial et ingestion RAG ({len(sections)} sections).",
+                **ingest_details,
+            )
+        ],
         "turn": 0,
         "pending_user_questions": [],
         "done": False,

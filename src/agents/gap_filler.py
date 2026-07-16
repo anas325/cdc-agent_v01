@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from src.context_utils import format_all_sections_context
+from src.context_utils import format_context_for_sections
 from src.ids import new_id
 from src.llm import call_structured
 from src.rag import retrieve
@@ -61,8 +61,8 @@ Catégorie : {gap.category}
 Sévérité : {gap.severity}
 Sections concernées : {gap.section_ids}
 
-CONTEXTE COMPLET du CDC (pour référencer précisément les éléments ambigus) :
-{format_all_sections_context(state)}
+CONTEXTE PERTINENT du CDC (sections concernées par la lacune, pour référencer précisément les éléments ambigus) :
+{format_context_for_sections(state, gap.section_ids)}
 
 Rédige UNE question précise et contextualisée à poser à l'utilisateur (rédacteur du CDC) pour
 lever cette ambiguïté. La question DOIT :
@@ -110,8 +110,8 @@ Description : "{gap.description}"
 Catégorie : {gap.category}
 Sections concernées : {gap.section_ids}
 
-CONTEXTE COMPLET :
-{format_all_sections_context(state)}
+CONTEXTE PERTINENT (sections concernées par la lacune) :
+{format_context_for_sections(state, gap.section_ids)}
 
 Propose une hypothèse par défaut raisonnable (pragmatique, standard du secteur) pour combler
 cette lacune, afin que le développement puisse démarrer. Le texte DOIT commencer par
