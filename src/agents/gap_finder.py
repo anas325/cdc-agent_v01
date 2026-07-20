@@ -12,7 +12,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from src.context_utils import format_all_sections_context, format_open_gaps, get_section
-from src.ids import new_id
+from src.ids import stable_id
 from src.llm import call_structured
 from src.state import CDCState, Gap, GapCategory, GapSeverity
 
@@ -163,7 +163,7 @@ def run_gap_finder(
     for cand in output.new_gaps:
         new_gaps.append(
             Gap(
-                id=new_id("gap"),
+                id=stable_id("gap", section_id or "", cand.category, cand.description),
                 section_ids=cand.section_ids or ([section_id] if section_id else []),
                 category=cand.category,
                 description=cand.description,

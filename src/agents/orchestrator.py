@@ -11,7 +11,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from src.context_utils import format_asked_questions, format_context_for_sections
-from src.ids import new_id
+from src.ids import stable_id
 from src.llm import call_structured
 from src.state import AskedQuestion, CDCState, Gap, PendingQuestion, SectionStatus
 
@@ -109,7 +109,10 @@ Réponds :
 
 
 def record_asked_questions(state: CDCState, batch: list[PendingQuestion], turn: int) -> list[AskedQuestion]:
-    return [AskedQuestion(id=new_id("q"), gap_id=pq.gap_id, text=pq.text, turn=turn) for pq in batch]
+    return [
+        AskedQuestion(id=stable_id("q", pq.gap_id, str(turn), pq.text), gap_id=pq.gap_id, text=pq.text, turn=turn)
+        for pq in batch
+    ]
 
 
 def new_section_status_map(state: CDCState) -> dict[str, SectionStatus]:

@@ -22,7 +22,7 @@ from src.agents import orchestrator as orch
 from src.agents import synthesizer as synthesizer_agent
 from src import telemetry
 from src.config import load_sections, load_settings
-from src.ids import new_id
+from src.ids import stable_id
 from src.rag import ingest_source_docs
 from src.state import CDCState, ContextItem, SectionStatus, TurnLogEntry
 from src.utils.cdc_sections import split_cdc_by_sections
@@ -66,7 +66,7 @@ def ingest_node(state: CDCState) -> dict:
             for sid, text in split.sections.items():
                 context_items.append(
                     ContextItem(
-                        id=new_id("ctx"),
+                        id=stable_id("ctx", sid, text),
                         content=text,
                         source="initial_cdc",
                         section_ids=[sid],
@@ -74,10 +74,12 @@ def ingest_node(state: CDCState) -> dict:
                         fresh=False,
                     )
                 )
-            for chunk in split.unmatched:
+            # The index keeps two byte-identical unmatched chunks distinct
+            # while still producing the same ids on a re-run.
+            for idx, chunk in enumerate(split.unmatched):
                 context_items.append(
                     ContextItem(
-                        id=new_id("ctx"),
+                        id=stable_id("ctx", "unmatched", str(idx), chunk),
                         content=chunk,
                         source="initial_cdc",
                         section_ids=[],
@@ -92,7 +94,7 @@ def ingest_node(state: CDCState) -> dict:
         else:
             context_items.append(
                 ContextItem(
-                    id=new_id("ctx"),
+                    id=stable_id("ctx", "whole", initial_text.strip()),
                     content=initial_text.strip(),
                     source="initial_cdc",
                     section_ids=[s.id for s in sections],
@@ -328,7 +330,9 @@ def integrate_answers_node(state: CDCState) -> dict:
             gaps_by_id[gap.id] = gap.model_copy(update={"status": "assumed"})
         else:
             item = ContextItem(
-                id=new_id("ctx"),
+                # Stable so that re-running with the same answers keeps
+                # hitting the LLM cache past the first question batch.
+                id=stable_id("ctx", "answer", gap.id, str(turn), text.strip()),
                 content=text.strip(),
                 source="user_answer",
                 section_ids=gap.section_ids,

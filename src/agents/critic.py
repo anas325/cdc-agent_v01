@@ -11,7 +11,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from src.context_utils import format_all_sections_context
-from src.ids import new_id
+from src.ids import stable_id
 from src.llm import call_structured
 from src.state import CDCState, Gap
 
@@ -70,7 +70,7 @@ conflit. Si aucune contradiction n'est trouvée, retourne une liste vide."""
     for finding in output.contradictions:
         severity = finding.severity if finding.severity in valid_severities else "important"
         gap = Gap(
-            id=new_id("gap"),
+            id=stable_id("gap", "critic", ",".join(finding.section_ids), finding.description),
             section_ids=finding.section_ids,
             category="contradiction",
             description=finding.description,

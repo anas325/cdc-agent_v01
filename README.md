@@ -55,6 +55,24 @@ Upload an initial CDC (optional) and/or reference documents for RAG in the
 sidebar, click "Démarrer", and answer questions as they come up. Download
 the final `.qmd`/`.docx` and QA report once the run completes.
 
+### Faster iteration on the same CDC (dev only)
+
+A cold run spends 5+ minutes in LLM calls before the first question appears
+(one gap-finder pass per section, then the first gap-filler batch). Set
+
+```
+CDC_LLM_CACHE=1
+```
+
+in `src/.env` to memoize every structured LLM call to `.cache/llm/`, keyed by
+the assembled prompt plus provider, model and output schema. Re-running the
+same CDC then replays that warm-up in well under a second; the telemetry panel
+flags which calls were served from disk.
+
+Off by default, so normal runs are never served stale output. To invalidate,
+delete the directory (`rm -rf .cache/llm`) — editing a prompt, switching model
+or changing `config/sections.yaml` already changes the key on its own.
+
 ## Project structure
 
 ```

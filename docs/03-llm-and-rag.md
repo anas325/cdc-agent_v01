@@ -56,6 +56,21 @@ Every agent module defines small Pydantic "wire" models for what it expects
 back (e.g. `DedupVerdict`, `GapFinderOutput`, `RagGrade`, `CriticOutput`) and
 passes them straight to `call_structured`.
 
+### Dev cache — [`src/llm_cache.py`](../src/llm_cache.py)
+
+Because this is the single chokepoint for LLM traffic, it is also where the
+optional dev cache lives. With `CDC_LLM_CACHE=1`, the parsed result is stored
+under `.cache/llm/` keyed by `sha256(assembled_prompt, provider, model,
+schema_name)` — the prompt is hashed *after* the JSON schema is appended, so a
+changed output model invalidates on its own. Hits are recorded in telemetry
+with `cache_hit=True` so replayed calls stay visible in the UI rather than
+silently vanishing from the timeline. Disabled unless the env var is set.
+
+This only works because ids embedded in prompts are content-derived
+(`stable_id` in [`src/ids.py`](../src/ids.py)) rather than `uuid4` — otherwise
+the same CDC would produce a different prompt string on every run and never
+hit. `new_id` remains for ids that are not rendered into any prompt.
+
 ## RAG — [`src/rag.py`](../src/rag.py)
 
 Chroma-backed, persisted locally, indexing `data/source_docs/`.

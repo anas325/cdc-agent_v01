@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from src.agents import orchestrator as orch
 from src.context_utils import format_context_for_sections
-from src.ids import new_id
+from src.ids import stable_id
 from src.llm import call_structured
 from src.rag import retrieve
 from src.state import CDCState, ContextItem, Gap, PendingQuestion
@@ -110,7 +110,7 @@ def fill_gaps(state: CDCState, turn: int, max_batch: int, max_per_gap: int) -> F
                 grade = _grade_rag_hits(gap, hits)
                 if grade.sufficient:
                     item = ContextItem(
-                        id=new_id("ctx"),
+                        id=stable_id("ctx", "rag", gap.id, grade.answer_summary),
                         content=f"[RAG] {grade.answer_summary}",
                         source="rag",
                         section_ids=gap.section_ids,
@@ -154,7 +154,7 @@ cette lacune, afin que le développement puisse démarrer. Le texte DOIT commenc
     if not text.upper().startswith("ASSUMPTION:"):
         text = f"ASSUMPTION: {text}"
     return ContextItem(
-        id=new_id("ctx"),
+        id=stable_id("ctx", "assumption", gap.id, text),
         content=text,
         source="assumption",
         section_ids=gap.section_ids,

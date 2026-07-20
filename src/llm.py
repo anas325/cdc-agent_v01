@@ -16,7 +16,7 @@ from typing import TypeVar
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
 
-from src import telemetry
+from src import llm_cache, telemetry
 from src.config import LLMSettings, load_settings
 
 T = TypeVar("T", bound=BaseModel)
@@ -96,7 +96,27 @@ def call_structured(prompt: str, model: type[T], llm: BaseChatModel | None = Non
     prompt_chars = 0
     response_chars = 0
     ok = False
+    cache_hit = False
+    cache_key: str | None = None
+    if llm_cache.enabled():
+        settings = load_settings()
+        cache_key = llm_cache.cache_key(
+            prompt=base_prompt,
+            provider=settings.llm.provider,
+            model=settings.llm.model,
+            schema_name=model.__name__,
+        )
     try:
+        if cache_key is not None:
+            cached = llm_cache.load(cache_key, model)
+            if cached is not None:
+                attempts = 1
+                prompt_chars = len(base_prompt)
+                response_chars = len(cached.model_dump_json())
+                ok = True
+                cache_hit = True
+                return cached  # type: ignore[return-value]
+
         for attempt in range(max_retries + 1):
             attempts = attempt + 1
             prompt_chars = len(attempt_prompt)
@@ -109,6 +129,8 @@ def call_structured(prompt: str, model: type[T], llm: BaseChatModel | None = Non
                     raise ValueError("empty response")
                 parsed = model.model_validate(json.loads(json_str))
                 ok = True
+                if cache_key is not None:
+                    llm_cache.store(cache_key, parsed)
                 return parsed
             except Exception as exc:  # noqa: BLE001 - retry loop, re-raised below if exhausted
                 last_error = exc
@@ -132,4 +154,5 @@ def call_structured(prompt: str, model: type[T], llm: BaseChatModel | None = Non
             response_chars=response_chars,
             started_at=started_at,
             error=None if ok else (str(last_error) if last_error else "call failed"),
+            cache_hit=cache_hit,
         )

@@ -35,6 +35,7 @@ class LLMCall:
     response_chars: int
     started_at: float
     error: str | None = None
+    cache_hit: bool = False
 
 
 @dataclass
@@ -124,6 +125,7 @@ def record_llm(
     response_chars: int,
     started_at: float,
     error: str | None = None,
+    cache_hit: bool = False,
 ) -> None:
     call = LLMCall(
         node=current_node_name(),
@@ -136,6 +138,7 @@ def record_llm(
         response_chars=response_chars,
         started_at=started_at,
         error=error,
+        cache_hit=cache_hit,
     )
     _llm_calls.append(call)
     run = _current_node.get()
@@ -200,6 +203,7 @@ def summary() -> dict:
         "llm_count": len(_llm_calls),
         "retry_count": sum(1 for c in _llm_calls if c.attempts > 1),
         "failure_count": sum(1 for c in _llm_calls if not c.ok),
+        "cache_hit_count": sum(1 for c in _llm_calls if c.cache_hit),
         "by_node": by_node,
         "by_schema": by_schema,
     }

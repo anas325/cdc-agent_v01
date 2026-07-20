@@ -540,6 +540,12 @@ def render_llm_calls(calls: list, summary: dict) -> None:
         st.caption("Aucun appel LLM enregistré.")
         return
 
+    if summary["cache_hit_count"]:
+        st.info(
+            f"{summary['cache_hit_count']} appel(s) servis depuis le cache disque "
+            "(CDC_LLM_CACHE=1) — les durées affichées ne reflètent pas un vrai coût LLM."
+        )
+
     if summary["retry_count"]:
         st.warning(
             f"{summary['retry_count']} appel(s) ont nécessité un retry de réparation JSON — "
@@ -552,6 +558,7 @@ def render_llm_calls(calls: list, summary: dict) -> None:
                 "Nœud": c.node,
                 "Schéma": c.schema,
                 "Durée (s)": round(c.duration_s, 2),
+                "Cache": "✓" if c.cache_hit else "",
                 "Tentatives": c.attempts,
                 "OK": c.ok,
                 "Prompt (car.)": c.prompt_chars,

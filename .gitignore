@@ -11,6 +11,7 @@ wheels/
 prompt.md
 .env
 .chroma
+.cache
 .langgraph_api
 .pytest_cache
 .streamlit
