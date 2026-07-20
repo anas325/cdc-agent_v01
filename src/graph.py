@@ -24,7 +24,7 @@ from src import telemetry
 from src.config import load_sections, load_settings
 from src.ids import new_id
 from src.rag import ingest_source_docs
-from src.state import CDCState, ContextItem, PendingQuestion, SectionStatus, TurnLogEntry
+from src.state import CDCState, ContextItem, SectionStatus, TurnLogEntry
 from src.utils.cdc_sections import split_cdc_by_sections
 
 
@@ -162,7 +162,7 @@ def initial_scan_node(state: CDCState) -> dict:
         )
 
     logs.append(_log(state, "initial_scan", f"Scan initial terminé : {len(gaps)} lacune(s) au total."))
-    return {"gaps": gaps, "active_gap_ids": [], "turn_log": logs}
+    return {"gaps": gaps, "turn_log": logs}
 
 
 def orchestrator_node(state: CDCState) -> dict:
@@ -234,7 +234,7 @@ def gap_finder_node(state: CDCState) -> dict:
     gaps = [g.model_copy(update={"status": "resolved"}) if g.id in resolved_ids else g for g in gaps]
     gaps.extend(result.new_gaps)
 
-    updates: dict = {"gaps": gaps, "active_gap_ids": [g.id for g in result.new_gaps]}
+    updates: dict = {"gaps": gaps}
     logs = [
         _log(
             state,
@@ -258,63 +258,38 @@ def gap_finder_node(state: CDCState) -> dict:
 
 def gap_filler_node(state: CDCState) -> dict:
     turn = state.get("turn", 0)
-    gap_ids = state.get("active_gap_ids", [])
-    result = gap_filler_agent.fill_gaps(state, gap_ids, turn)
+    settings = state["loop_settings"]
+    result = gap_filler_agent.fill_gaps(
+        state, turn, settings.max_questions_per_batch, settings.max_questions_per_gap
+    )
 
-    context_items = list(state["context_items"]) + result.new_context_items
-    gaps = list(state["gaps"])
-    gaps_by_id = {g.id: g for g in gaps}
+    gaps_by_id = {g.id: g for g in state["gaps"]}
     for gap_id, new_status in result.gap_updates.items():
-        gaps_by_id[gap_id] = gaps_by_id[gap_id].model_copy(update={"status": new_status})
-    gaps = list(gaps_by_id.values())
+        update: dict = {"status": new_status}
+        answering_item_id = result.resolved_by.get(gap_id)
+        if answering_item_id:
+            update["answer_item_ids"] = gaps_by_id[gap_id].answer_item_ids + [answering_item_id]
+        gaps_by_id[gap_id] = gaps_by_id[gap_id].model_copy(update=update)
 
-    max_per_gap = state["loop_settings"].max_questions_per_gap
-    to_queue: list[PendingQuestion] = []
-    auto_assumptions: list[ContextItem] = []
+    for gap_id in result.rag_attempted_gap_ids:
+        gaps_by_id[gap_id] = gaps_by_id[gap_id].model_copy(update={"rag_attempted": True})
 
+    # Every returned question is asked this turn — fill_gaps stops at the batch cap.
     for pq in result.pending_questions:
-        gap = gaps_by_id[pq.gap_id]
-        if gap.questions_asked >= max_per_gap:
-            item = gap_filler_agent.build_assumption(state, gap, turn)
-            auto_assumptions.append(item)
-            gaps_by_id[gap.id] = gap.model_copy(update={"status": "assumed"})
-            continue
-
-        verdict = orch.dedup_gate(state, gap, pq.text)
-        if verdict.already_resolved and verdict.resolved_by_item_id:
-            gaps_by_id[gap.id] = gap.model_copy(
-                update={"status": "resolved", "answer_item_ids": gap.answer_item_ids + [verdict.resolved_by_item_id]}
-            )
-            continue
-
-        text = verdict.rewritten_question if verdict.partially_resolved and verdict.rewritten_question else pq.text
-        to_queue.append(PendingQuestion(gap_id=gap.id, text=text))
-
-    gaps = list(gaps_by_id.values())
-    context_items = context_items + auto_assumptions
-
-    max_batch = state["loop_settings"].max_questions_per_batch
-    this_batch, remainder = orch.batch_questions(to_queue, max_batch)
-
-    for pq in this_batch:
         g = gaps_by_id[pq.gap_id]
         gaps_by_id[pq.gap_id] = g.model_copy(update={"questions_asked": g.questions_asked + 1})
-    gaps = list(gaps_by_id.values())
-
-    rag_ids = [it.id for it in result.new_context_items]
-    assumption_ids = [it.id for it in auto_assumptions]
 
     return {
-        "context_items": context_items,
-        "gaps": gaps,
-        "pending_user_questions": this_batch + remainder,
-        "active_fresh_item_ids": rag_ids + assumption_ids,
+        "context_items": list(state["context_items"]) + result.new_context_items,
+        "gaps": list(gaps_by_id.values()),
+        "pending_user_questions": result.pending_questions,
+        "active_fresh_item_ids": [it.id for it in result.new_context_items],
         "turn_log": [
             _log(
                 state,
                 "gap_filler",
-                f"{len(result.new_context_items)} réponse(s) RAG, {len(this_batch)} question(s) envoyée(s), "
-                f"{len(auto_assumptions)} hypothèse(s) auto (limite atteinte).",
+                f"{len(result.new_context_items)} élément(s) auto-résolu(s) (RAG/hypothèse), "
+                f"{len(result.pending_questions)} question(s) envoyée(s).",
             )
         ],
     }

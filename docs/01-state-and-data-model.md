@@ -27,7 +27,6 @@ class CDCState(TypedDict, total=False):
     stop_reason: str | None
     current_mode: Literal["fresh", "section"]
     active_fresh_item_ids: list[str]
-    active_gap_ids: list[str]
     _raw_answers: dict            # transient, human_input -> integrate_answers only
     _qmd_text: str                # transient, synthesizer -> final_validator only
     _mapped_items: dict[str, list[str]]  # transient, synthesizer -> final_validator only

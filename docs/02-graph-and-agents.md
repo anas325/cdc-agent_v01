@@ -69,8 +69,7 @@ Deliberately narrow:
   section exactly as it would have.
 - **Skipped sections are excluded**; non-required ones (e.g. `constraints`)
   are included, so they get a rating too.
-- **No `gap_filler`.** No RAG lookups and no questions to the user up front;
-  `active_gap_ids` is reset to `[]`.
+- **No `gap_filler`.** No RAG lookups and no questions to the user up front.
 
 Each call receives the gaps found so far, so the "ne pas dupliquer" instruction
 in the section prompt works across the scan. It is a sequential in-process loop
@@ -135,11 +134,12 @@ user answers never produce a redundant prompt to the user.
 
 #### Question batching
 
-`batch_questions(pending, max_batch)` splits the queue into
-`(this_turn_batch, remainder)`. Only `this_turn_batch` is sent as ONE
-interrupt; `remainder` is carried into `pending_user_questions` for the
-following turn (see priority #1 above) — the user is never shown more than
-`max_questions_per_batch` questions in a single Streamlit form.
+There is no separate batching step: `fill_gaps` stops selecting as soon as it
+holds `max_questions_per_batch` questions, so `pending_user_questions` *is* the
+batch and the user is never shown more than that in a single Streamlit form.
+There is likewise no carried-over remainder — a gap that lost out this turn
+simply stays `open` and competes again next turn, which is what keeps the
+ordering globally severity-driven rather than first-come-first-served.
 
 ### `gap_finder` (agent: [`src/agents/gap_finder.py`](../src/agents/gap_finder.py))
 
@@ -168,25 +168,39 @@ which also updates `section_statuses` when in `section` mode.
 
 ### `gap_filler` (agent: [`src/agents/gap_filler.py`](../src/agents/gap_filler.py))
 
-For every currently-open gap targeted this turn (`active_gap_ids`, sorted
-`blocking` → `important` → `nice_to_have`):
+**Severity is always the selection key.** The candidate pool is *every* gap in
+`state["gaps"]` with `status == "open"` — not just the ones found this turn —
+sorted `blocking` → `important` → `nice_to_have` (ties keep gap-creation
+order). This is what guarantees a blocking gap left over from turn 1 is asked
+before a `nice_to_have` found in turn 5.
 
-1. **RAG first**: `rag.retrieve(gap.description)` against the Chroma
-   collection. If there are hits, one LLM call (`_grade_rag_hits`) judges
-   whether they're *sufficient and unambiguous* — not just topically
+Candidates are then walked **lazily** in that order, and the walk breaks as
+soon as `max_questions_per_batch` questions are held — so nothing is drafted
+that won't be asked. For each candidate:
+
+1. **Budget check**: if the gap has already hit `max_questions_per_gap`
+   rounds, instead of asking again it calls `build_assumption()` — one LLM
+   call proposing a pragmatic, industry-standard default, prefixed
+   `ASSUMPTION:` — marks the gap `assumed`, and moves on. This happens
+   *before* any drafting call, so an exhausted gap costs nothing extra.
+2. **RAG first** (only if `gap.rag_attempted` is false, so a gap is graded at
+   most once across the whole run): `rag.retrieve(gap.description)` against
+   the Chroma collection. If there are hits, one LLM call (`_grade_rag_hits`)
+   judges whether they're *sufficient and unambiguous* — not just topically
    related. If sufficient, a new `ContextItem(source="rag", fresh=True)` is
    created and the gap moves to `rag_answered`.
-2. **Otherwise, draft a question**: `_draft_question()` — one LLM call
+3. **Otherwise, draft a question**: `_draft_question()` — one LLM call
    instructed to produce a question that quotes or paraphrases the specific
    ambiguous text (never a generic "can you clarify scope?"), naming both
    sides explicitly if it's a contradiction.
+4. **Dedup gate**: the drafted question goes through `orch.dedup_gate` before
+   being queued. Because this runs inside the severity-ordered walk, a
+   question the gate kills advances to the next candidate rather than leaving
+   the batch short.
 
-Back in `graph.py`'s `gap_filler_node`, each drafted question then goes
-through the orchestrator's dedup gate (`orch.dedup_gate`) before being
-queued. If a gap has already hit `max_questions_per_gap` rounds, instead of
-asking again it calls `build_assumption()` — one more LLM call that proposes
-a pragmatic, industry-standard default, prefixed `ASSUMPTION:`, and marks the
-gap `assumed`. Assumptions built this way, or built from an explicit user
+`gap_filler_node` in `graph.py` is then a thin wrapper: it applies
+`gap_updates` / `rag_attempted_gap_ids` to the gap list and increments
+`questions_asked` for each returned question (all of them are asked). Assumptions built this way, or built from an explicit user
 "I don't know" (see `integrate_answers` below), always carry
 `source="assumption"` so the synthesizer can flag them visibly.
 

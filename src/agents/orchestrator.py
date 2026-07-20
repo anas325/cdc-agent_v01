@@ -107,10 +107,6 @@ Réponds :
     return call_structured(prompt, DedupVerdict)
 
 
-def batch_questions(pending: list[PendingQuestion], max_batch: int) -> tuple[list[PendingQuestion], list[PendingQuestion]]:
-    """Returns (this_turn_batch, remaining_for_later)."""
-    return pending[:max_batch], pending[max_batch:]
-
 
 def record_asked_questions(state: CDCState, batch: list[PendingQuestion], turn: int) -> list[AskedQuestion]:
     return [AskedQuestion(id=new_id("q"), gap_id=pq.gap_id, text=pq.text, turn=turn) for pq in batch]

@@ -633,7 +633,6 @@ def render_raw_state(values: dict) -> None:
         "turn": values.get("turn"),
         "current_mode": values.get("current_mode"),
         "current_section_id": values.get("current_section_id"),
-        "active_gap_ids": values.get("active_gap_ids"),
         "active_fresh_item_ids": values.get("active_fresh_item_ids"),
         "done": values.get("done"),
         "stop_reason": values.get("stop_reason"),

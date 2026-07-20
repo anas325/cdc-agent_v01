@@ -214,7 +214,7 @@ version stops emitting it.
   first, each expander labelled with the agent, its one-line summary, and the
   node elapsed time, and containing a `st.json` dump of the structured details.
 - **État brut du checkpointer** — the scalar state fields (`turn`,
-  `current_mode`, `current_section_id`, `active_gap_ids`, `stop_reason`, …)
+  `current_mode`, `current_section_id`, `stop_reason`, …)
   plus expanders dumping `context_items`, `asked_questions`, and
   `sections_config`.
 

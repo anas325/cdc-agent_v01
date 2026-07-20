@@ -79,7 +79,6 @@ def test_does_not_write_section_statuses(recorder):
     updates = initial_scan_node(base_state())
 
     assert "section_statuses" not in updates
-    assert updates["active_gap_ids"] == []
 
 
 def test_each_call_sees_gaps_found_so_far(recorder):

@@ -1,15 +1,17 @@
 """Gap-filler agent.
 
-For each open gap, tries RAG first; grades the retrieved answer with an
-LLM call. If insufficient, formulates one precise, context-referencing
-question for the user. Also builds ASSUMPTION context items when the user
-answers "I don't know".
+Walks every open gap in severity order (most severe first) and, for each one,
+tries RAG first, grading the retrieved answer with an LLM call. If insufficient,
+formulates one precise, context-referencing question for the user, and stops once
+the turn's question budget is full. Also builds ASSUMPTION context items when a
+gap runs out of question budget or the user answers "I don't know".
 """
 
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from src.agents import orchestrator as orch
 from src.context_utils import format_context_for_sections
 from src.ids import new_id
 from src.llm import call_structured
@@ -37,6 +39,8 @@ class FillResult(BaseModel):
     new_context_items: list[ContextItem] = Field(default_factory=list)
     pending_questions: list[PendingQuestion] = Field(default_factory=list)
     gap_updates: dict[str, str] = Field(default_factory=dict)  # gap_id -> new status
+    rag_attempted_gap_ids: list[str] = Field(default_factory=list)
+    resolved_by: dict[str, str] = Field(default_factory=dict)  # gap_id -> answering context item id
 
 
 def _grade_rag_hits(gap: Gap, hits: list[dict]) -> RagGrade:
@@ -73,32 +77,61 @@ lever cette ambiguïté. La question DOIT :
     return call_structured(prompt, QuestionDraft).question_text
 
 
-def fill_gaps(state: CDCState, gap_ids: list[str], turn: int) -> FillResult:
-    gaps_by_id = {g.id: g for g in state["gaps"]}
-    open_gaps = [gaps_by_id[gid] for gid in gap_ids if gaps_by_id.get(gid) and gaps_by_id[gid].status == "open"]
-    open_gaps.sort(key=lambda g: _SEVERITY_ORDER[g.severity])
+def fill_gaps(state: CDCState, turn: int, max_batch: int, max_per_gap: int) -> FillResult:
+    """Selects the questions to ask this turn, always most-severe first.
+
+    The candidate pool is *every* open gap, not just the ones found this turn, so a
+    blocking gap left over from an earlier turn always outranks a nice_to_have found
+    just now. Candidates are processed lazily in severity order and the loop stops as
+    soon as ``max_batch`` questions are held, so nothing is drafted that won't be asked
+    and there is no leftover queue to carry over: an un-asked gap stays ``open`` and
+    competes again next turn.
+    """
+    open_gaps = [g for g in state["gaps"] if g.status == "open"]
+    open_gaps.sort(key=lambda g: _SEVERITY_ORDER[g.severity])  # stable: ties keep creation order
 
     result = FillResult()
 
     for gap in open_gaps:
-        hits = retrieve(gap.description)
-        if hits:
-            grade = _grade_rag_hits(gap, hits)
-            if grade.sufficient:
-                item = ContextItem(
-                    id=new_id("ctx"),
-                    content=f"[RAG] {grade.answer_summary}",
-                    source="rag",
-                    section_ids=gap.section_ids,
-                    linked_gap_id=gap.id,
-                    turn_added=turn,
-                    fresh=True,
-                )
-                result.new_context_items.append(item)
-                result.gap_updates[gap.id] = "rag_answered"
-                continue
+        if len(result.pending_questions) >= max_batch:
+            break
+
+        # Gap has exhausted its question budget: settle it with a default assumption
+        # rather than spending a drafting call on a question we can't ask.
+        if gap.questions_asked >= max_per_gap:
+            result.new_context_items.append(build_assumption(state, gap, turn))
+            result.gap_updates[gap.id] = "assumed"
+            continue
+
+        if not gap.rag_attempted:
+            result.rag_attempted_gap_ids.append(gap.id)
+            hits = retrieve(gap.description)
+            if hits:
+                grade = _grade_rag_hits(gap, hits)
+                if grade.sufficient:
+                    item = ContextItem(
+                        id=new_id("ctx"),
+                        content=f"[RAG] {grade.answer_summary}",
+                        source="rag",
+                        section_ids=gap.section_ids,
+                        linked_gap_id=gap.id,
+                        turn_added=turn,
+                        fresh=True,
+                    )
+                    result.new_context_items.append(item)
+                    result.gap_updates[gap.id] = "rag_answered"
+                    continue
 
         question_text = _draft_question(state, gap)
+
+        verdict = orch.dedup_gate(state, gap, question_text)
+        if verdict.already_resolved and verdict.resolved_by_item_id:
+            result.gap_updates[gap.id] = "resolved"
+            result.resolved_by[gap.id] = verdict.resolved_by_item_id
+            continue
+        if verdict.partially_resolved and verdict.rewritten_question:
+            question_text = verdict.rewritten_question
+
         result.pending_questions.append(PendingQuestion(gap_id=gap.id, text=question_text))
 
     return result

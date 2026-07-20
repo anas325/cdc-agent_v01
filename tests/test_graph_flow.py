@@ -107,7 +107,6 @@ def base_seed(sections: list[SectionConfig], statuses: dict[str, SectionStatus],
         "current_mode": "section",
         "current_section_id": None,
         "active_fresh_item_ids": [],
-        "active_gap_ids": [],
         "done": False,
         "stop_reason": None,
     }
@@ -165,6 +164,67 @@ def test_gap_with_no_rag_hits_reaches_human_input_interrupt(graph, scripted_llm,
 
     state = graph.get_state(config)
     assert state.next == ("human_input",)
+
+
+def test_interrupt_payload_is_severity_ordered_and_capped(graph, scripted_llm, no_rag_hits):
+    """End-to-end: what the user is actually shown is the top-N by severity.
+
+    Seeds gaps that would have been found in earlier turns (so they are *not*
+    the ones gap_finder returns this turn) and asserts they still win on
+    severity, and that the form never exceeds max_questions_per_batch.
+    """
+    sections = make_sections()
+    statuses = {
+        "sec_a": SectionStatus(section_id="sec_a", status="in_progress"),
+        "sec_b": SectionStatus(section_id="sec_b", status="empty"),
+    }
+    leftovers = [
+        Gap(id="gap_old_nice", section_ids=["sec_a"], category="scope",
+            description="vieille lacune mineure", severity="nice_to_have", rag_attempted=True),
+        Gap(id="gap_old_blocking", section_ids=["sec_a"], category="business_rule",
+            description="vieille lacune bloquante", severity="blocking", rag_attempted=True),
+    ]
+    seed = base_seed(
+        sections,
+        statuses,
+        gaps=leftovers,
+        loop_settings=LoopSettings(max_turns=15, max_questions_per_batch=2, max_questions_per_gap=2),
+    )
+    config = make_config()
+
+    # This turn's gap_finder contributes one merely-important gap.
+    scripted_llm.add(
+        GapFinderOutput,
+        GapFinderOutput(
+            new_gaps=[
+                GapCandidate(section_ids=["sec_a"], category="nfr",
+                             description="nouvelle lacune importante", severity="important")
+            ],
+            resolved_gap_ids=[],
+            section_complete=False,
+        ),
+    )
+    # Drafting echoes the gap description so we can identify which gaps won.
+    scripted_llm.add(
+        QuestionDraft,
+        QuestionDraft(question_text="Q-bloquante"),
+        QuestionDraft(question_text="Q-importante"),
+    )
+    scripted_llm.add(DedupVerdict, DedupVerdict(), DedupVerdict())
+
+    graph.update_state(config, seed, as_node="initial_scan")
+    result = graph.invoke(None, config)
+
+    payload = result["__interrupt__"][0].value
+    # Cap respected, blocking first, and the old nice_to_have is excluded
+    # despite being the oldest gap in the pool.
+    assert [q["text"] for q in payload["questions"]] == ["Q-bloquante", "Q-importante"]
+    assert payload["questions"][0]["gap_id"] == "gap_old_blocking"
+
+    gaps_by_id = {g.id: g for g in graph.get_state(config).values["gaps"]}
+    assert gaps_by_id["gap_old_blocking"].questions_asked == 1
+    assert gaps_by_id["gap_old_nice"].questions_asked == 0
+    assert gaps_by_id["gap_old_nice"].status == "open"  # stays open, competes again next turn
 
 
 def result_gap_id(graph, config) -> str:

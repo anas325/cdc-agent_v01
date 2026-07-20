@@ -60,6 +60,7 @@ class Gap(BaseModel):
     question_text: str | None = None
     answer_item_ids: list[str] = Field(default_factory=list)
     questions_asked: int = 0
+    rag_attempted: bool = False
 
 
 class SectionStatus(BaseModel):
@@ -121,7 +122,6 @@ class CDCState(TypedDict, total=False):
     stop_reason: str | None
     current_mode: Literal["fresh", "section"]
     active_fresh_item_ids: list[str]
-    active_gap_ids: list[str]
     _raw_answers: dict
     _qmd_text: str
     _mapped_items: dict[str, list[str]]
