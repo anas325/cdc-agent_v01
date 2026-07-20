@@ -1,7 +1,7 @@
 # Graph & Agents
 
 The orchestration backbone is [`src/graph.py`](../src/graph.py): a LangGraph
-`StateGraph(CDCState)` with nine nodes. Node functions in `graph.py` are thin
+`StateGraph(CDCState)` with ten nodes. Node functions in `graph.py` are thin
 wrappers — they call into `src/agents/*.py` for actual logic, then translate
 the result into a state-update dict and a `TurnLogEntry`. This split keeps
 agent logic unit-testable without spinning up the graph.
@@ -9,7 +9,7 @@ agent logic unit-testable without spinning up the graph.
 ## Graph topology
 
 ```
-START -> ingest -> orchestrator -> (route_after_orchestrator)
+START -> ingest -> initial_scan -> orchestrator -> (route_after_orchestrator)
     -> gap_finder -> gap_filler -> (route_after_gap_filler)
          -> human_input -> integrate_answers -> critic -> orchestrator
          -> critic -> orchestrator
@@ -44,12 +44,39 @@ pending_user_questions ? -> human_input : critic
 Runs once at the start of a run. Loads `sections.yaml` and `settings.yaml`
 (via `src/config.py`), calls `rag.ingest_source_docs()` to (re)index
 `data/source_docs/` into Chroma, seeds `context_items` with the user-supplied
-initial CDC text (if any, tagged `source="initial_cdc"`, attached to every
-section since it's unstructured input), and initializes every section's
+initial CDC text (if any, tagged `source="initial_cdc"`, split per section by
+`split_cdc_by_sections()` so each section carries only its own slice —
+unmatched chunks become untagged items with `section_ids=[]`, and if no
+heading is recognized at all the whole document is kept as one item tagged
+with every section), and initializes every section's
 status to `empty` — unless the caller already passed in a `section_statuses`
 entry for it (e.g. `status="skipped"`, set by the Streamlit sidebar before
 `invoke()`), in which case the incoming status is kept as-is rather than
 overwritten.
+
+### `initial_scan`
+
+Runs once, right after `ingest`. Calls `gap_finder` in `"section"` mode once
+per section (sequentially, in `sections.yaml` order) so that every section has
+real gaps — and therefore a meaningful score in the UI — before the main loop
+starts. Without it, `score_section()` reports 100/100 for every section until
+the orchestrator happens to reach it, several turns in.
+
+Deliberately narrow:
+
+- **Gaps only.** It ignores the computed `section_complete` and never writes
+  `section_statuses`, so the orchestrator loop afterwards still works every
+  section exactly as it would have.
+- **Skipped sections are excluded**; non-required ones (e.g. `constraints`)
+  are included, so they get a rating too.
+- **No `gap_filler`.** No RAG lookups and no questions to the user up front;
+  `active_gap_ids` is reset to `[]`.
+
+Each call receives the gaps found so far, so the "ne pas dupliquer" instruction
+in the section prompt works across the scan. It is a sequential in-process loop
+rather than a `Send` fan-out because `gaps` is a last-write-wins field in
+`CDCState` (only `turn_log` has a reducer) — parallel branches would clobber
+each other.
 
 ### `orchestrator` (agent: [`src/agents/orchestrator.py`](../src/agents/orchestrator.py))
 
@@ -125,8 +152,10 @@ One LLM call (`call_structured`) per invocation, run in one of two modes:
   the fixed gap taxonomy category by category —
   `functional_ambiguity, nfr, data_model, business_rule, edge_case,
   integration, acceptance_criteria, contradiction, scope` — rather than free
-  associate. Also returns a `section_complete` verdict: true only if the
-  section has zero open blocking/important gaps after this pass.
+  associate. The `section_complete` verdict is **not** asked of the LLM — it
+  is computed locally by `compute_section_complete()` from the resulting gap
+  set: true only if the section has zero open blocking/important gaps after
+  this pass.
 - **`fresh` mode** — focused on a set of just-added `context_items`
   (`active_fresh_item_ids`). For each, judges whether it actually resolves
   the gap it's linked to (`resolved_gap_ids`) or needs a follow-up gap

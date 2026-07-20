@@ -1,6 +1,6 @@
 """LangGraph wiring for the CDC refinement agent swarm.
 
-START -> ingest -> orchestrator -> (route)
+START -> ingest -> initial_scan -> orchestrator -> (route)
     -> gap_finder -> gap_filler -> (route: pending questions?)
          -> human_input -> integrate_answers -> critic -> orchestrator
          -> critic -> orchestrator
@@ -20,6 +20,7 @@ from src.agents import gap_filler as gap_filler_agent
 from src.agents import gap_finder as gap_finder_agent
 from src.agents import orchestrator as orch
 from src.agents import synthesizer as synthesizer_agent
+from src import telemetry
 from src.config import load_sections, load_settings
 from src.ids import new_id
 from src.rag import ingest_source_docs
@@ -28,6 +29,11 @@ from src.utils.cdc_sections import split_cdc_by_sections
 
 
 def _log(state: CDCState, agent: str, summary: str, **details) -> TurnLogEntry:
+    # Stamp how long the enclosing node had been running when it logged, so the
+    # turn log carries timing without every node having to measure it.
+    elapsed = telemetry.current_node_elapsed()
+    if elapsed is not None:
+        details = {**details, "_elapsed_s": round(elapsed, 3)}
     return TurnLogEntry(turn=state.get("turn", 0), agent=agent, summary=summary, details=details)
 
 
@@ -125,6 +131,38 @@ def ingest_node(state: CDCState) -> dict:
         "done": False,
         "stop_reason": None,
     }
+
+
+def initial_scan_node(state: CDCState) -> dict:
+    """Un passage de gap_finder par section, pour obtenir une note initiale partout.
+
+    Lacunes uniquement : les section_statuses sont volontairement laissés
+    intacts, pour que la boucle orchestrateur traite ensuite chaque section
+    normalement.
+    """
+    statuses = state.get("section_statuses") or {}
+    gaps = list(state.get("gaps") or [])
+    logs: list[TurnLogEntry] = []
+
+    for sec in state["sections_config"]:
+        st = statuses.get(sec.id)
+        if st is not None and st.status == "skipped":
+            continue
+        # État roulant : chaque appel voit les lacunes déjà trouvées, pour que
+        # la consigne "ne pas dupliquer" du prompt section ait un effet.
+        result = gap_finder_agent.run_gap_finder({**state, "gaps": gaps}, mode="section", section_id=sec.id)
+        gaps.extend(result.new_gaps)
+        logs.append(
+            _log(
+                state,
+                "initial_scan",
+                f"Scan initial {sec.id} : {len(result.new_gaps)} lacune(s).",
+                section_id=sec.id,
+            )
+        )
+
+    logs.append(_log(state, "initial_scan", f"Scan initial terminé : {len(gaps)} lacune(s) au total."))
+    return {"gaps": gaps, "active_gap_ids": [], "turn_log": logs}
 
 
 def orchestrator_node(state: CDCState) -> dict:
@@ -383,21 +421,38 @@ def final_validator_node(state: CDCState) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _timed(name: str, fn):
+    """Wrap a node so src.telemetry records its wall clock and nested LLM calls.
+
+    Applied at registration rather than as a decorator on each node function so
+    the nodes stay directly callable (and testable) without telemetry.
+    """
+
+    def wrapper(state: CDCState) -> dict:
+        with telemetry.record_node(name):
+            return fn(state)
+
+    wrapper.__name__ = getattr(fn, "__name__", name)
+    return wrapper
+
+
 def build_graph():
     graph = StateGraph(CDCState)
 
-    graph.add_node("ingest", ingest_node)
-    graph.add_node("orchestrator", orchestrator_node)
-    graph.add_node("gap_finder", gap_finder_node)
-    graph.add_node("gap_filler", gap_filler_node)
-    graph.add_node("human_input", human_input_node)
-    graph.add_node("integrate_answers", integrate_answers_node)
-    graph.add_node("critic", critic_node)
-    graph.add_node("synthesizer", synthesizer_node)
-    graph.add_node("final_validator", final_validator_node)
+    graph.add_node("ingest", _timed("ingest", ingest_node))
+    graph.add_node("initial_scan", _timed("initial_scan", initial_scan_node))
+    graph.add_node("orchestrator", _timed("orchestrator", orchestrator_node))
+    graph.add_node("gap_finder", _timed("gap_finder", gap_finder_node))
+    graph.add_node("gap_filler", _timed("gap_filler", gap_filler_node))
+    graph.add_node("human_input", _timed("human_input", human_input_node))
+    graph.add_node("integrate_answers", _timed("integrate_answers", integrate_answers_node))
+    graph.add_node("critic", _timed("critic", critic_node))
+    graph.add_node("synthesizer", _timed("synthesizer", synthesizer_node))
+    graph.add_node("final_validator", _timed("final_validator", final_validator_node))
 
     graph.add_edge(START, "ingest")
-    graph.add_edge("ingest", "orchestrator")
+    graph.add_edge("ingest", "initial_scan")
+    graph.add_edge("initial_scan", "orchestrator")
 
     graph.add_conditional_edges(
         "orchestrator",

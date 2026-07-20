@@ -5,7 +5,7 @@ only things faked — everything else (node functions, conditional edges,
 checkpointing, interrupts) is the real graph.
 
 Each test seeds a full CDCState directly onto the checkpoint via
-`graph.update_state(config, seed, as_node="ingest")` and then resumes
+`graph.update_state(config, seed, as_node="initial_scan")` and then resumes
 execution from there. This lets us start mid-pipeline (e.g. with a section
 already "complete") without having to script an entire multi-turn run just
 to get there.
@@ -147,7 +147,9 @@ def test_gap_with_no_rag_hits_reaches_human_input_interrupt(graph, scripted_llm,
     scripted_llm.add(QuestionDraft, QuestionDraft(question_text="Quel est le volume de production maximal visé ?"))
     scripted_llm.add(DedupVerdict, DedupVerdict())  # nothing already answers it
 
-    graph.update_state(config, seed, as_node="ingest")
+    # as_node="initial_scan": these tests exercise the orchestrator loop, so
+    # they seed past the initial per-section scan rather than scripting it.
+    graph.update_state(config, seed, as_node="initial_scan")
     result = graph.invoke(None, config)
 
     interrupts = result.get("__interrupt__")
@@ -269,7 +271,9 @@ def test_max_turns_with_blocking_gap_stops_instead_of_looping(graph, scripted_ll
     # No responses scripted anywhere: apply_loop_limits is pure logic and
     # must short-circuit before any node makes an LLM call. If it doesn't,
     # ScriptedLLM raises immediately instead of the test hanging.
-    graph.update_state(config, seed, as_node="ingest")
+    # as_node="initial_scan": these tests exercise the orchestrator loop, so
+    # they seed past the initial per-section scan rather than scripting it.
+    graph.update_state(config, seed, as_node="initial_scan")
     result = graph.invoke(None, config)
 
     assert result.get("done") is True

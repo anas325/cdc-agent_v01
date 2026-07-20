@@ -9,12 +9,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from functools import lru_cache
 from typing import TypeVar
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
 
+from src import telemetry
 from src.config import LLMSettings, load_settings
 
 T = TypeVar("T", bound=BaseModel)
@@ -87,20 +89,47 @@ def call_structured(prompt: str, model: type[T], llm: BaseChatModel | None = Non
 
     last_error: Exception | None = None
     attempt_prompt = base_prompt
-    for attempt in range(max_retries + 1):
-        response = llm.invoke(attempt_prompt)
-        raw = response.content if hasattr(response, "content") else str(response)
-        json_str = _extract_json(raw)
-        try:
-            if not json_str.strip():
-                raise ValueError("empty response")
-            return model.model_validate(json.loads(json_str))
-        except Exception as exc:  # noqa: BLE001 - retry loop, re-raised below if exhausted
-            last_error = exc
-            attempt_prompt = (
-                f"{base_prompt}\n\n"
-                f"Your previous response could not be parsed as valid JSON ({exc}). "
-                f"Previous response was:\n{raw}\n\nReturn ONLY the corrected JSON object."
-            )
+    # Telemetry: one record per call_structured, covering all retries. Recorded
+    # in `finally` so timed-out or failed calls still show up in the UI.
+    started_at = time.perf_counter()
+    attempts = 0
+    prompt_chars = 0
+    response_chars = 0
+    ok = False
+    try:
+        for attempt in range(max_retries + 1):
+            attempts = attempt + 1
+            prompt_chars = len(attempt_prompt)
+            response = llm.invoke(attempt_prompt)
+            raw = response.content if hasattr(response, "content") else str(response)
+            response_chars = len(raw)
+            json_str = _extract_json(raw)
+            try:
+                if not json_str.strip():
+                    raise ValueError("empty response")
+                parsed = model.model_validate(json.loads(json_str))
+                ok = True
+                return parsed
+            except Exception as exc:  # noqa: BLE001 - retry loop, re-raised below if exhausted
+                last_error = exc
+                attempt_prompt = (
+                    f"{base_prompt}\n\n"
+                    f"Your previous response could not be parsed as valid JSON ({exc}). "
+                    f"Previous response was:\n{raw}\n\nReturn ONLY the corrected JSON object."
+                )
 
-    raise StructuredCallError(f"LLM did not return parseable JSON after {max_retries + 1} attempts: {last_error}")
+        raise StructuredCallError(
+            f"LLM did not return parseable JSON after {max_retries + 1} attempts: {last_error}"
+        )
+    finally:
+        telemetry.record_llm(
+            schema=model.__name__,
+            model=load_settings().llm.model,
+            duration_s=time.perf_counter() - started_at,
+            attempts=attempts,
+            ok=ok,
+            prompt_chars=prompt_chars,
+            response_chars=response_chars,
+            started_at=started_at,
+            error=None if ok else (str(last_error) if last_error else "call failed"),
+        )
