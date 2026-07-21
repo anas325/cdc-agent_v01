@@ -10,6 +10,8 @@ START -> ingest -> initial_scan -> orchestrator -> (route)
 
 from __future__ import annotations
 
+from functools import partial
+
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -22,6 +24,7 @@ from src.agents import orchestrator as orch
 from src.agents import synthesizer as synthesizer_agent
 from src import telemetry
 from src.config import load_sections, load_settings
+from src.llm import map_structured
 from src.ids import stable_id
 from src.rag import ingest_source_docs
 from src.state import CDCState, ContextItem, SectionStatus, TurnLogEntry
@@ -146,13 +149,21 @@ def initial_scan_node(state: CDCState) -> dict:
     gaps = list(state.get("gaps") or [])
     logs: list[TurnLogEntry] = []
 
-    for sec in state["sections_config"]:
-        st = statuses.get(sec.id)
-        if st is not None and st.status == "skipped":
-            continue
-        # État roulant : chaque appel voit les lacunes déjà trouvées, pour que
-        # la consigne "ne pas dupliquer" du prompt section ait un effet.
-        result = gap_finder_agent.run_gap_finder({**state, "gaps": gaps}, mode="section", section_id=sec.id)
+    # Ces appels par section sont indépendants : on les lance en parallèle (le
+    # gros poste de temps du run). Contrairement à la boucle série d'origine,
+    # chaque appel voit le même instantané de gaps (pré-scan), donc la consigne
+    # "ne pas dupliquer" ne couvre plus les sections entre elles — compromis
+    # accepté : le critic / dedup_gate en aval rattrapent les doublons.
+    scan_sections = [
+        sec
+        for sec in state["sections_config"]
+        if not (statuses.get(sec.id) is not None and statuses[sec.id].status == "skipped")
+    ]
+    base = {**state, "gaps": gaps}
+    results = map_structured(
+        [partial(gap_finder_agent.run_gap_finder, base, mode="section", section_id=sec.id) for sec in scan_sections]
+    )
+    for sec, result in zip(scan_sections, results):
         gaps.extend(result.new_gaps)
         logs.append(
             _log(

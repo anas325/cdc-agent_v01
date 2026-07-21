@@ -62,7 +62,9 @@ def base_state(statuses: dict[str, SectionStatus] | None = None) -> dict:
 def test_scans_every_section_including_non_required(recorder):
     updates = initial_scan_node(base_state())
 
-    assert [sid for sid, _ in recorder] == ["sec_a", "sec_b", "sec_c"]
+    # Sections are scanned concurrently, so call order isn't guaranteed; the
+    # merged result order is (zipped back in sections_config order).
+    assert {sid for sid, _ in recorder} == {"sec_a", "sec_b", "sec_c"}
     assert [g.id for g in updates["gaps"]] == ["gap_sec_a", "gap_sec_b", "gap_sec_c"]
 
 
@@ -71,7 +73,7 @@ def test_skipped_sections_are_not_scanned(recorder):
 
     updates = initial_scan_node(state)
 
-    assert [sid for sid, _ in recorder] == ["sec_a", "sec_c"]
+    assert {sid for sid, _ in recorder} == {"sec_a", "sec_c"}
     assert [g.id for g in updates["gaps"]] == ["gap_sec_a", "gap_sec_c"]
 
 
@@ -81,12 +83,12 @@ def test_does_not_write_section_statuses(recorder):
     assert "section_statuses" not in updates
 
 
-def test_each_call_sees_gaps_found_so_far(recorder):
+def test_every_call_sees_the_same_prescan_snapshot(recorder):
+    # Parallelized: calls run concurrently, so each sees the same pre-scan gap
+    # snapshot (empty here) rather than a rolling accumulation.
     initial_scan_node(base_state())
 
-    assert recorder[0][1] == []
-    assert recorder[1][1] == ["gap_sec_a"]
-    assert recorder[2][1] == ["gap_sec_a", "gap_sec_b"]
+    assert [seen for _, seen in recorder] == [[], [], []]
 
 
 def test_preexisting_gaps_are_preserved(recorder):
@@ -96,7 +98,8 @@ def test_preexisting_gaps_are_preserved(recorder):
     updates = initial_scan_node(state)
 
     assert updates["gaps"][0].id == "gap_seed"
-    assert recorder[0][1] == ["gap_seed"]
+    # Every parallel call sees the pre-scan snapshot, which includes seed gaps.
+    assert all(seen == ["gap_seed"] for _, seen in recorder)
 
 
 def test_logs_one_entry_per_scanned_section_plus_summary(recorder):

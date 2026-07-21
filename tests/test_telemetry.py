@@ -41,6 +41,26 @@ def test_llm_calls_attribute_to_enclosing_node():
     assert [c.node for c in telemetry.llm_calls()] == ["gap_finder", "gap_finder", "(hors nœud)"]
 
 
+def test_map_structured_attributes_fanned_out_llm_calls_to_the_node():
+    """The thread fan-out must re-bind the enclosing node (via telemetry.bound_to)
+    so concurrent LLM calls land on it instead of "(hors nœud)"."""
+    from src.llm import map_structured
+
+    def job(seconds: float):
+        return lambda: (_llm(seconds), "done")[1]
+
+    with telemetry.record_node("initial_scan"):
+        results = map_structured([job(1.0), job(2.0), job(3.0)])
+
+    assert results == ["done", "done", "done"]  # order preserved
+    runs = telemetry.node_runs()
+    assert len(runs) == 1
+    assert [c.node for c in runs[0].llm_calls] == ["initial_scan"] * 3
+    assert runs[0].llm_seconds == pytest.approx(6.0)
+    # Nothing leaked out to "(hors nœud)".
+    assert all(c.node == "initial_scan" for c in telemetry.llm_calls())
+
+
 def test_node_run_is_recorded_even_when_the_node_raises():
     with pytest.raises(ValueError):
         with telemetry.record_node("critic"):

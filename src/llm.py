@@ -10,6 +10,8 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from typing import TypeVar
 
@@ -20,6 +22,10 @@ from src import llm_cache, telemetry
 from src.config import LLMSettings, load_settings
 
 T = TypeVar("T", bound=BaseModel)
+
+# Cap concurrency on the fan-out so we don't hammer the LLM backend (Ollama
+# cloud rate limits). Lower this if concurrent invokes start erroring.
+_MAX_FANOUT_WORKERS = 8
 
 
 def _build_llm(cfg: LLMSettings, json_mode: bool = False) -> BaseChatModel:
@@ -156,3 +162,28 @@ def call_structured(prompt: str, model: type[T], llm: BaseChatModel | None = Non
             error=None if ok else (str(last_error) if last_error else "call failed"),
             cache_hit=cache_hit,
         )
+
+
+def map_structured(jobs: list[Callable[[], T]]) -> list[T]:
+    """Run independent LLM-producing callables concurrently, preserving order.
+
+    Each job is any zero-arg callable that ultimately makes one or more
+    `call_structured` calls (e.g. a `partial(run_gap_finder, ...)`). LLM calls
+    are network-bound, so a thread pool gives real wall-clock parallelism while
+    keeping the graph nodes synchronous.
+
+    Each worker re-binds the enclosing telemetry node (see telemetry.bound_to)
+    so the fanned-out LLM calls attribute to the right node instead of
+    "(hors nœud)". `ThreadPoolExecutor.map` preserves input order, so callers
+    can zip results back against their inputs deterministically.
+    """
+    if not jobs:
+        return []
+    run = telemetry.current_run()
+
+    def _worker(job: Callable[[], T]) -> T:
+        with telemetry.bound_to(run):
+            return job()
+
+    with ThreadPoolExecutor(max_workers=min(_MAX_FANOUT_WORKERS, len(jobs))) as ex:
+        return list(ex.map(_worker, jobs))

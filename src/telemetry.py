@@ -114,6 +114,26 @@ def current_node_name() -> str:
     return run.node if run else "(hors nœud)"
 
 
+def current_run() -> NodeRun | None:
+    """The NodeRun currently in scope, for re-binding across worker threads."""
+    return _current_node.get()
+
+
+@contextmanager
+def bound_to(run: NodeRun | None):
+    """Bind `run` as the current node inside a worker thread.
+
+    A fanned-out LLM call runs in a fresh thread whose ContextVar starts empty;
+    binding the parent's NodeRun here makes record_llm attribute the call to the
+    enclosing node instead of "(hors nœud)".
+    """
+    token = _current_node.set(run)
+    try:
+        yield
+    finally:
+        _current_node.reset(token)
+
+
 def record_llm(
     *,
     schema: str,

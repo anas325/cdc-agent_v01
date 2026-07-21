@@ -10,13 +10,14 @@ from __future__ import annotations
 import datetime
 import shutil
 import subprocess
+from functools import partial
 from pathlib import Path
 
 from pydantic import BaseModel
 
 from src.config import load_settings
 from src.context_utils import format_context_items, get_section
-from src.llm import call_structured
+from src.llm import call_structured, map_structured
 from src.state import CDCState, ContextItem
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -59,13 +60,18 @@ Rédige uniquement le corps de la section (pas de titre h1, le titre est déjà 
 
 
 def build_section_render_map(state: CDCState) -> tuple[dict[str, str], dict[str, list[str]]]:
-    """Returns (slot_id -> rendered prose, section_id -> mapped context item ids)."""
-    slots: dict[str, str] = {}
-    mapped: dict[str, list[str]] = {}
-    for section in state["sections_config"]:
-        items = [it for it in state["context_items"] if section.id in it.section_ids]
-        slots[section.template_slot] = render_slot(state, section.id, items)
-        mapped[section.id] = [it.id for it in items]
+    """Returns (slot_id -> rendered prose, section_id -> mapped context item ids).
+
+    Each section renders independently (no rolling state), so the per-section
+    LLM calls are fanned out concurrently; results are zipped back in order.
+    """
+    sections = state["sections_config"]
+    items_per = [[it for it in state["context_items"] if sec.id in it.section_ids] for sec in sections]
+    proses = map_structured(
+        [partial(render_slot, state, sec.id, items) for sec, items in zip(sections, items_per)]
+    )
+    slots = {sec.template_slot: prose for sec, prose in zip(sections, proses)}
+    mapped = {sec.id: [it.id for it in items] for sec, items in zip(sections, items_per)}
     return slots, mapped
 
 
