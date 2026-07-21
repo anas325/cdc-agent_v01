@@ -754,8 +754,8 @@ def main() -> None:
     init_session_state()
     settings = load_settings()
 
-    st.title("CDC Refinement Agent Swarm")
-
+    st.title("Assistant CDC IA")
+    st.subheader("Système Multi-Agents Intelligent pour l’Analyse et le Raffinement des Cahiers des Charges")
     cdc_text, loop_settings, start_clicked, skip_map = render_sidebar(settings)
 
     tab_run, tab_debug = st.tabs([":material/play_arrow: Pilotage", ":material/build: Sous le capot"])
