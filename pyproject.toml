@@ -19,6 +19,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "sentence-transformers>=5.6.0",
     "streamlit>=1.59.1",
+    "torch>=2.6.0",
 ]
 
 [dependency-groups]
@@ -26,3 +27,12 @@ dev = [
     "langgraph-cli[inmem]>=0.4.30",
     "pytest>=9.1.1",
 ]
+
+# CPU-only torch: keeps Streamlit Cloud (Linux) from pulling multi-GB CUDA wheels.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }

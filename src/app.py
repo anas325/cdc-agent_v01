@@ -12,7 +12,9 @@ src.telemetry), raw gaps, the turn log, and the checkpointer snapshot.
 
 from __future__ import annotations
 
+import hmac
 import logging
+import os
 import sys
 import time
 import uuid
@@ -93,6 +95,37 @@ SEVERITY_WEIGHTS = {
 }
 
 st.set_page_config(page_title="CDC Refinement Agent", layout="wide")
+
+
+def _check_password() -> bool:
+    """Shared-password gate. Fails closed if APP_PASSWORD is not configured."""
+    expected = os.environ.get("APP_PASSWORD", "")
+    if not expected:
+        try:
+            expected = st.secrets.get("APP_PASSWORD", "")
+        except Exception:
+            expected = ""
+    if not expected:
+        st.error("APP_PASSWORD non configuré (Cloud secrets ou src/.env).")
+        return False
+
+    if st.session_state.get("_password_ok"):
+        return True
+
+    def _entered() -> None:
+        st.session_state["_password_ok"] = hmac.compare_digest(
+            st.session_state.get("_password", ""), expected
+        )
+        st.session_state.pop("_password", None)
+
+    st.text_input("Mot de passe", type="password", key="_password", on_change=_entered)
+    if st.session_state.get("_password_ok") is False:
+        st.error("Mot de passe incorrect.")
+    return False
+
+
+if not _check_password():
+    st.stop()
 
 
 @st.cache_resource
