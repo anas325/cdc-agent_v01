@@ -20,6 +20,38 @@ from src.state import CDCState, ContextItem, Gap, PendingQuestion
 
 _SEVERITY_ORDER = {"blocking": 0, "important": 1, "nice_to_have": 2}
 
+# Gap-type tie-break within a (section, severity) bucket: contradictions first,
+# then the remaining categories by descending business impact (mirrors the
+# CATEGORY_WEIGHTS used for section scoring in the UI).
+_CATEGORY_ORDER = {
+    "contradiction": 0,
+    "scope": 1,
+    "functional_ambiguity": 2,
+    "business_rule": 3,
+    "acceptance_criteria": 4,
+    "integration": 5,
+    "data_model": 6,
+    "nfr": 7,
+    "edge_case": 8,
+}
+
+
+def _pool_sort_key(gap: Gap, section_rank: dict[str, int], n_sections: int):
+    """Rank a gap in the candidate pool: section, then severity, then gap type.
+
+    ``section_rank`` maps a section id to its position in sections_config, with
+    skipped sections omitted so a gap left attached only to skipped sections (or
+    to none) sinks to the bottom. A gap spanning several sections is ranked by
+    its earliest still-active section.
+    """
+    ranks = [section_rank[sid] for sid in gap.section_ids if sid in section_rank]
+    section = min(ranks) if ranks else n_sections
+    return (
+        section,
+        _SEVERITY_ORDER[gap.severity],
+        _CATEGORY_ORDER.get(gap.category, len(_CATEGORY_ORDER)),
+    )
+
 
 class RagGrade(BaseModel):
     sufficient: bool
@@ -78,17 +110,27 @@ lever cette ambiguïté. La question DOIT :
 
 
 def fill_gaps(state: CDCState, turn: int, max_batch: int, max_per_gap: int) -> FillResult:
-    """Selects the questions to ask this turn, always most-severe first.
+    """Selects the questions to ask this turn, section by section.
 
     The candidate pool is *every* open gap, not just the ones found this turn, so a
-    blocking gap left over from an earlier turn always outranks a nice_to_have found
-    just now. Candidates are processed lazily in severity order and the loop stops as
-    soon as ``max_batch`` questions are held, so nothing is drafted that won't be asked
-    and there is no leftover queue to carry over: an un-asked gap stays ``open`` and
+    gap left over from an earlier turn competes with fresh ones. Gaps are ranked by
+    section (in sections_config order), then severity (most severe first), then gap
+    type (contradictions first). The loop processes them lazily and stops as soon as
+    ``max_batch`` questions are held, so nothing is drafted that won't be asked and
+    there is no leftover queue to carry over: an un-asked gap stays ``open`` and
     competes again next turn.
     """
+    sections = state.get("sections_config", [])
+    statuses = state.get("section_statuses", {})
+    section_rank = {
+        sec.id: i
+        for i, sec in enumerate(sections)
+        if not (statuses.get(sec.id) and statuses[sec.id].status == "skipped")
+    }
+
     open_gaps = [g for g in state["gaps"] if g.status == "open"]
-    open_gaps.sort(key=lambda g: _SEVERITY_ORDER[g.severity])  # stable: ties keep creation order
+    # Stable sort: full ties (same section/severity/type) keep creation order.
+    open_gaps.sort(key=lambda g: _pool_sort_key(g, section_rank, len(sections)))
 
     result = FillResult()
 

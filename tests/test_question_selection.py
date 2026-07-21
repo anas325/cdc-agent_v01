@@ -104,6 +104,53 @@ def test_questions_are_severity_ordered_and_capped(no_rag_hits, draft_calls, ded
     assert len(draft_calls) == 3  # nothing drafted beyond the cap
 
 
+def test_pool_ranks_by_section_then_severity_then_type(no_rag_hits, draft_calls, dedup_passthrough):
+    """Section is the primary key; within a section, severity then gap type."""
+    state = {
+        "sections_config": [
+            SectionConfig(id="sec_a", title="A", description="a", required=True, template_slot="a"),
+            SectionConfig(id="sec_b", title="B", description="b", required=True, template_slot="b"),
+        ],
+        "context_items": [],
+        "gaps": [
+            # sec_b comes second even though it holds a blocking gap.
+            make_gap("b_blocking", "blocking", section_ids=["sec_b"]),
+            # Within sec_a: same severity, contradiction must precede edge_case.
+            make_gap("a_edge", "important", section_ids=["sec_a"], category="edge_case"),
+            make_gap("a_contra", "important", section_ids=["sec_a"], category="contradiction"),
+        ],
+        "asked_questions": [],
+        "section_statuses": {},
+    }
+
+    result = fill_gaps(state, turn=1, max_batch=3, max_per_gap=2)
+
+    assert [pq.gap_id for pq in result.pending_questions] == ["a_contra", "a_edge", "b_blocking"]
+
+
+def test_skipped_section_gaps_sink_below_active_ones(no_rag_hits, draft_calls, dedup_passthrough):
+    """A gap on a skipped section is ranked last, behind every active-section gap."""
+    from src.state import SectionStatus
+
+    state = {
+        "sections_config": [
+            SectionConfig(id="sec_a", title="A", description="a", required=True, template_slot="a"),
+            SectionConfig(id="sec_b", title="B", description="b", required=True, template_slot="b"),
+        ],
+        "context_items": [],
+        "gaps": [
+            make_gap("a_blocking", "blocking", section_ids=["sec_a"]),
+            make_gap("b_blocking", "blocking", section_ids=["sec_b"]),
+        ],
+        "asked_questions": [],
+        "section_statuses": {"sec_a": SectionStatus(section_id="sec_a", status="skipped")},
+    }
+
+    result = fill_gaps(state, turn=1, max_batch=2, max_per_gap=2)
+
+    assert [pq.gap_id for pq in result.pending_questions] == ["b_blocking", "a_blocking"]
+
+
 def test_ties_keep_gap_creation_order(no_rag_hits, draft_calls, dedup_passthrough):
     state = make_state([make_gap("b1", "blocking"), make_gap("b2", "blocking"), make_gap("b3", "blocking")])
 

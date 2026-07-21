@@ -311,6 +311,14 @@ def human_input_node(state: CDCState) -> dict:
 def integrate_answers_node(state: CDCState) -> dict:
     turn = state.get("turn", 0)
     answers = state.get("_raw_answers", {}) or {}
+
+    # The user clicked "skip section" instead of answering: mark that section
+    # skipped and defer its still-open gaps (those left attached only to skipped
+    # sections) so the orchestrator moves on to the next section next turn.
+    skip_section_id = answers.get("__skip_section__") if isinstance(answers, dict) else None
+    if skip_section_id:
+        return _skip_section(state, skip_section_id)
+
     batch = state["pending_user_questions"]
 
     gaps_by_id = {g.id: g for g in state["gaps"]}
@@ -352,6 +360,41 @@ def integrate_answers_node(state: CDCState) -> dict:
         "pending_user_questions": [],
         "active_fresh_item_ids": list(set(state.get("active_fresh_item_ids", []) + [it.id for it in new_items])),
         "turn_log": [_log(state, "integrate_answers", f"{len(new_items)} réponse(s) intégrée(s).")],
+    }
+
+
+def _skip_section(state: CDCState, section_id: str) -> dict:
+    statuses = dict(state["section_statuses"])
+    statuses[section_id] = SectionStatus(section_id=section_id, status="skipped")
+    skipped_ids = {sid for sid, ss in statuses.items() if ss.status == "skipped"}
+
+    deferred = 0
+    gaps = []
+    for g in state["gaps"]:
+        # Defer an open gap only if every section it still hangs off is skipped
+        # (or it has none): a contradiction shared with an active section stays
+        # open and gets handled when that section's turn comes.
+        if g.status == "open" and section_id in g.section_ids and all(
+            sid in skipped_ids for sid in g.section_ids
+        ):
+            gaps.append(g.model_copy(update={"status": "deferred"}))
+            deferred += 1
+        else:
+            gaps.append(g)
+
+    return {
+        "gaps": gaps,
+        "section_statuses": statuses,
+        "pending_user_questions": [],
+        "active_fresh_item_ids": [],
+        "turn_log": [
+            _log(
+                state,
+                "integrate_answers",
+                f"Section {section_id} ignorée par l'utilisateur ; {deferred} lacune(s) reportée(s).",
+                section_id=section_id,
+            )
+        ],
     }
 
 

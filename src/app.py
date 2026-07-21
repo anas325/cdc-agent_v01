@@ -49,6 +49,20 @@ SEVERITIES = ["blocking", "important", "nice_to_have"]
 SEVERITY_LABELS = {"blocking": "bloquante", "important": "importante", "nice_to_have": "optionnelle"}
 SEVERITY_BADGE = {"blocking": "red", "important": "orange", "nice_to_have": "gray"}
 SEVERITY_ORDER = {"blocking": 0, "important": 1, "nice_to_have": 2}
+# Gap-type ordering: contradictions first, then by descending impact. Mirrors
+# _CATEGORY_ORDER in src.agents.gap_filler so the displayed order matches the
+# order gaps are actually pulled from the pool.
+CATEGORY_ORDER = {
+    "contradiction": 0,
+    "scope": 1,
+    "functional_ambiguity": 2,
+    "business_rule": 3,
+    "acceptance_criteria": 4,
+    "integration": 5,
+    "data_model": 6,
+    "nfr": 7,
+    "edge_case": 8,
+}
 
 # Gap statuses that mean "no longer a hole in the CDC".
 CLOSED_STATUSES = {"rag_answered", "user_answered", "assumed", "resolved"}
@@ -331,7 +345,12 @@ def render_status_table(values: dict) -> None:
 
 
 def _gap_sort_key(gap):
-    return (gap.status not in ("open",), SEVERITY_ORDER.get(gap.severity, 9), gap.id)
+    return (
+        gap.status not in ("open",),
+        SEVERITY_ORDER.get(gap.severity, 9),
+        CATEGORY_ORDER.get(gap.category, len(CATEGORY_ORDER)),
+        gap.id,
+    )
 
 
 def render_gap_card(gap, questions_by_gap: dict, answers_by_gap: dict, max_per_gap: int) -> None:
@@ -408,6 +427,20 @@ def render_question_form(questions: list[dict], values: dict) -> None:
     st.subheader("Questions en attente")
     gaps_by_id = {g.id: g for g in values.get("gaps", [])}
 
+    # The section these questions belong to = the earliest one (in config order)
+    # among the pending gaps. That is the section a "skip" button jumps past.
+    sections = values.get("sections_config", [])
+    section_order = {sec.id: i for i, sec in enumerate(sections)}
+    section_title = {sec.id: sec.title for sec in sections}
+    pending_section_ids = [
+        sid for q in questions if (g := gaps_by_id.get(q["gap_id"])) for sid in g.section_ids
+    ]
+    skip_section_id = (
+        min(pending_section_ids, key=lambda s: section_order.get(s, 1_000))
+        if pending_section_ids
+        else None
+    )
+
     with st.form("answer_form"):
         for q in questions:
             gap = gaps_by_id.get(q["gap_id"])
@@ -420,9 +453,21 @@ def render_question_form(questions: list[dict], values: dict) -> None:
             col1, col2 = st.columns([4, 1], vertical_alignment="center")
             col1.text_input("Réponse", key=f"qa_answer_{q['gap_id']}", label_visibility="collapsed")
             col2.checkbox("Je ne sais pas", key=f"qa_skip_{q['gap_id']}")
-        submitted = st.form_submit_button("Envoyer les réponses", type="primary")
+        submit_col, skip_col = st.columns([1, 1])
+        submitted = submit_col.form_submit_button("Envoyer les réponses", type="primary")
+        skip_label = (
+            f"⏭ Passer la section « {section_title.get(skip_section_id, skip_section_id)} »"
+            if skip_section_id
+            else "⏭ Passer cette section"
+        )
+        skipped_section = skip_col.form_submit_button(
+            skip_label, disabled=skip_section_id is None
+        )
 
-    if submitted:
+    if skipped_section and skip_section_id:
+        run_graph(Command(resume={"__skip_section__": skip_section_id}))
+        st.rerun()
+    elif submitted:
         answers = {
             q["gap_id"]: {
                 "text": st.session_state.get(f"qa_answer_{q['gap_id']}", ""),
