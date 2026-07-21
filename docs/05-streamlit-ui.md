@@ -175,11 +175,19 @@ version stops emitting it.
 - **`render_question_form`** — one text input + "je ne sais pas" checkbox per
   pending question, inside a single `st.form` (so all answers submit together,
   matching the batching the orchestrator already enforces), each prefixed with
-  its gap's severity/category badges. On submit it builds
-  `{gap_id: {"text": ..., "skip": ...}}` and calls
-  `run_graph(Command(resume=answers))`. `Command(resume=...)` is LangGraph's
-  mechanism for feeding a value back into a paused `interrupt()` — it becomes
-  `human_input_node`'s return value, which flows into `integrate_answers_node`.
+  its gap's severity/category badges. The form has two submit buttons:
+  - **"Envoyer les réponses"** builds `{gap_id: {"text": ..., "skip": ...}}`
+    and calls `run_graph(Command(resume=answers))`.
+  - **"Passer la section « … »"** skips the whole section the batch belongs to
+    — computed as the earliest section (in `sections.yaml` order) among the
+    pending gaps — by resuming with the `{"__skip_section__": <section_id>}`
+    signal that `integrate_answers_node` recognizes. This lets the user jump to
+    the next section without answering the current one; that section's open
+    gaps are deferred and it's marked `skipped`.
+
+  `Command(resume=...)` is LangGraph's mechanism for feeding a value back into
+  a paused `interrupt()` — it becomes `human_input_node`'s return value, which
+  flows into `integrate_answers_node`.
 - **`render_gaps`** — the readable view of `state["gaps"]`. One expander per
   section (auto-expanded when it holds a blocking gap), containing one
   bordered card per gap: severity badge, status badge, category, gap id, the
@@ -188,8 +196,9 @@ version stops emitting it.
   `ContextItem.linked_gap_id`), and a caption with the
   `questions_asked/max_questions_per_gap` budget. Gaps with no `section_ids`
   land in a final "Non rattachés" group. Sorted open-first, then
-  blocking → important → nice_to_have. Resolved gaps are hidden behind a
-  toggle by default.
+  blocking → important → nice_to_have, then by gap type (contradiction first,
+  via `CATEGORY_ORDER`) — matching the pool's selection order. Resolved gaps
+  are hidden behind a toggle by default.
 - **`render_completion`** — shown once `finished`. Renders
   `output/qa_report.md` inline, and offers download buttons for
   `cdc_final.qmd` (always present) and `cdc_final.docx` (only if the file

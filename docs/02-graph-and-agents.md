@@ -139,7 +139,8 @@ holds `max_questions_per_batch` questions, so `pending_user_questions` *is* the
 batch and the user is never shown more than that in a single Streamlit form.
 There is likewise no carried-over remainder — a gap that lost out this turn
 simply stays `open` and competes again next turn, which is what keeps the
-ordering globally severity-driven rather than first-come-first-served.
+ordering driven by the section/severity/type rank rather than
+first-come-first-served.
 
 ### `gap_finder` (agent: [`src/agents/gap_finder.py`](../src/agents/gap_finder.py))
 
@@ -168,11 +169,25 @@ which also updates `section_statuses` when in `section` mode.
 
 ### `gap_filler` (agent: [`src/agents/gap_filler.py`](../src/agents/gap_filler.py))
 
-**Severity is always the selection key.** The candidate pool is *every* gap in
+**Selection is ranked section-first.** The candidate pool is *every* gap in
 `state["gaps"]` with `status == "open"` — not just the ones found this turn —
-sorted `blocking` → `important` → `nice_to_have` (ties keep gap-creation
-order). This is what guarantees a blocking gap left over from turn 1 is asked
-before a `nice_to_have` found in turn 5.
+sorted by a three-level key (`_pool_sort_key`):
+
+1. **Section** — the gap's earliest section in `sections.yaml` order.
+   `section_statuses` marked `skipped` are dropped from the rank map, so a gap
+   left attached only to skipped sections (or to none) sinks to the bottom; a
+   gap spanning several sections ranks by its earliest still-active one.
+2. **Severity** — `blocking` → `important` → `nice_to_have`.
+3. **Gap type** — `contradiction` first, then `scope`,
+   `functional_ambiguity`, `business_rule`, `acceptance_criteria`,
+   `integration`, `data_model`, `nfr`, `edge_case` (descending impact, mirrors
+   `CATEGORY_WEIGHTS` used for section scoring in the UI).
+
+The sort is stable, so full ties keep gap-creation order. Grouping by section
+first means the agent finishes questioning one section before moving to the
+next, which is what the UI's "skip section" button (see `integrate_answers`)
+short-circuits. `_CATEGORY_ORDER` in `gap_filler.py` and `CATEGORY_ORDER` in
+`app.py` are kept in sync so the displayed gap order matches the pool order.
 
 Candidates are then walked **lazily** in that order, and the walk breaks as
 soon as `max_questions_per_batch` questions are held — so nothing is drafted
@@ -194,9 +209,8 @@ that won't be asked. For each candidate:
    ambiguous text (never a generic "can you clarify scope?"), naming both
    sides explicitly if it's a contradiction.
 4. **Dedup gate**: the drafted question goes through `orch.dedup_gate` before
-   being queued. Because this runs inside the severity-ordered walk, a
-   question the gate kills advances to the next candidate rather than leaving
-   the batch short.
+   being queued. Because this runs inside the ranked walk, a question the gate
+   kills advances to the next candidate rather than leaving the batch short.
 
 `gap_filler_node` in `graph.py` is then a thin wrapper: it applies
 `gap_updates` / `rag_attempted_gap_ids` to the gap list and increments
@@ -218,11 +232,23 @@ via `graph.invoke(Command(resume=answers), config)`. See
 
 ### `integrate_answers`
 
-Pure state transformation, no LLM call. For each queued question: records it
-into `asked_questions` (permanent log), and either:
+Pure state transformation, no LLM call.
 
-- the user skipped or left it blank → `gap_filler_agent.build_assumption()`
-  is called to synthesize a default, gap → `assumed`; or
+If the resume payload is the **skip-section** signal
+(`{"__skip_section__": <section_id>}`, sent by the UI's "Passer la section"
+button), `_skip_section()` handles it instead of the per-question loop: it
+marks that section `skipped` and defers every open gap whose sections are *all*
+skipped (a contradiction still shared with an active section stays `open` and
+is handled when that section's turn comes). No answers are recorded. The
+orchestrator's `pick_next_section()` then moves past the skipped section next
+turn — the same mechanism as sections pre-skipped from the sidebar.
+
+Otherwise, for each queued question it records the question into
+`asked_questions` (permanent log), and either:
+
+- the user skipped the single question or left it blank →
+  `gap_filler_agent.build_assumption()` is called to synthesize a default,
+  gap → `assumed`; or
 - the user answered → a `ContextItem(source="user_answer", fresh=True,
   linked_gap_id=gap.id)` is created, gap → `user_answered` with the new item
   id appended to `answer_item_ids`.
