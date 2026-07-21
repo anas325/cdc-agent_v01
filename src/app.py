@@ -755,7 +755,12 @@ def main() -> None:
     settings = load_settings()
 
     st.title("Assistant CDC IA")
+    
     st.subheader("Système Multi-Agents Intelligent pour l’Analyse et le Raffinement des Cahiers des Charges")
+    st.write("Un assistant intelligent qui aide à améliorer et compléter un cahier des charges."
+"Il analyse le document pour identifier les informations manquantes, les ambiguïtés et les incohérences, puis propose des"
+" améliorations ou pose des questions ciblées pour clarifier les besoins. À la fin, il génère un cahier des charges structuré"
+" et prêt à être transmis à une équipe de développement, accompagné d'un rapport de vérification.")
     cdc_text, loop_settings, start_clicked, skip_map = render_sidebar(settings)
 
     tab_run, tab_debug = st.tabs([":material/play_arrow: Pilotage", ":material/build: Sous le capot"])
