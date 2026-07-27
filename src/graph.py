@@ -469,7 +469,7 @@ def _timed(name: str, fn):
     return wrapper
 
 
-def build_graph():
+def build_graph(checkpointer=None):
     graph = StateGraph(CDCState)
 
     graph.add_node("ingest", _timed("ingest", ingest_node))
@@ -511,4 +511,4 @@ def build_graph():
     graph.add_edge("synthesizer", "final_validator")
     graph.add_edge("final_validator", END)
 
-    return graph.compile(checkpointer=MemorySaver())
+    return graph.compile(checkpointer=checkpointer or MemorySaver())

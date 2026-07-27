@@ -12,7 +12,6 @@ src.telemetry), raw gaps, the turn log, and the checkpointer snapshot.
 
 from __future__ import annotations
 
-import hmac
 import logging
 import os
 import sys
@@ -29,9 +28,10 @@ if str(ROOT_DIR) not in sys.path:
 logging.getLogger("streamlit.watcher.local_sources_watcher").setLevel(logging.ERROR)
 
 import streamlit as st
+import streamlit_authenticator as stauth
 from langgraph.types import Command
 
-from src import telemetry
+from src import db, telemetry
 from src.config import load_sections, load_settings
 from src.graph import build_graph
 from src.state import LoopSettings, SectionStatus
@@ -97,40 +97,53 @@ SEVERITY_WEIGHTS = {
 st.set_page_config(page_title="CDC Refinement Agent", layout="wide")
 
 
-def _check_password() -> bool:
-    """Shared-password gate. Fails closed if APP_PASSWORD is not configured."""
-    expected = os.environ.get("APP_PASSWORD", "")
-    if not expected:
+def _read_secret(name: str) -> str:
+    val = os.environ.get(name, "")
+    if not val:
         try:
-            expected = st.secrets.get("APP_PASSWORD", "")
+            val = st.secrets.get(name, "")
         except Exception:
-            expected = ""
-    if not expected:
-        st.error("APP_PASSWORD non configuré (Cloud secrets ou src/.env).")
-        return False
-
-    if st.session_state.get("_password_ok"):
-        return True
-
-    def _entered() -> None:
-        st.session_state["_password_ok"] = hmac.compare_digest(
-            st.session_state.get("_password", ""), expected
-        )
-        st.session_state.pop("_password", None)
-
-    st.text_input("Mot de passe", type="password", key="_password", on_change=_entered)
-    if st.session_state.get("_password_ok") is False:
-        st.error("Mot de passe incorrect.")
-    return False
+            val = ""
+    return val
 
 
-if not _check_password():
+def _get_authenticator() -> stauth.Authenticate:
+    """Build the authenticator from the closed, admin-managed user list.
+
+    Credentials live in st.secrets ([credentials.usernames.*], bcrypt hashes).
+    No registration widget is wired, so the user set stays closed. The JWT
+    cookie keeps the login alive across reloads, new tabs, and restarts.
+
+    Rebuilt each run (not cached): the Authenticate object owns a per-session
+    cookie manager, so it must not be shared across sessions. Rebuilding is
+    cheap since the passwords are already hashed.
+    """
+    key = _read_secret("COOKIE_KEY")
+    try:
+        usernames = dict(st.secrets["credentials"]["usernames"])
+    except Exception:
+        usernames = {}
+    if not key or not usernames:
+        st.error("Auth non configurée (credentials / COOKIE_KEY dans les secrets).")
+        st.stop()
+    credentials = {"usernames": {u: dict(v) for u, v in usernames.items()}}
+    return stauth.Authenticate(credentials, "cdc_agent_auth", key, cookie_expiry_days=30)
+
+
+authenticator = _get_authenticator()
+authenticator.login(location="main")
+
+if st.session_state.get("authentication_status") is not True:
+    if st.session_state.get("authentication_status") is False:
+        st.error("Identifiants incorrects.")
     st.stop()
+
+USERNAME = st.session_state["username"]
 
 
 @st.cache_resource
 def get_graph():
-    return build_graph()
+    return build_graph(checkpointer=db.get_checkpointer())
 
 
 def init_session_state() -> None:
@@ -206,10 +219,18 @@ def process_step_result(result: dict) -> None:
         st.session_state.pending_questions = interrupts[0].value.get("questions", [])
         st.session_state.finished = False
         st.session_state.run_active = False
+        status = "awaiting_input"
     else:
         st.session_state.pending_questions = None
         st.session_state.finished = bool(result.get("done"))
         st.session_state.run_active = False
+        status = "finished" if st.session_state.finished else "running"
+
+    if st.session_state.thread_id:
+        try:
+            db.touch_run(st.session_state.thread_id, status)
+        except Exception as exc:  # noqa: BLE001 - persistence is best-effort here
+            st.warning(f"Impossible de mettre à jour l'historique du run : {exc}")
 
 
 def get_state_values() -> dict:
@@ -217,6 +238,34 @@ def get_state_values() -> dict:
         return {}
     snapshot = get_graph().get_state(current_config())
     return snapshot.values or {}
+
+
+def load_run_into_session(thread_id: str) -> None:
+    """Reopen a persisted run: point the session at its thread and rebuild the
+    UI flags from the durable checkpoint so it renders where it left off."""
+    st.session_state.thread_id = thread_id
+    st.session_state.run_active = False
+    st.session_state.step_timeline = []
+    st.session_state.last_step_seconds = None
+
+    snapshot = get_graph().get_state(current_config())
+    values = snapshot.values or {}
+    tasks = getattr(snapshot, "tasks", ()) or ()
+    interrupts = [i for task in tasks for i in (getattr(task, "interrupts", ()) or ())]
+
+    if interrupts:
+        st.session_state.pending_questions = interrupts[0].value.get("questions", [])
+        st.session_state.finished = False
+    elif values.get("pending_user_questions"):
+        # Fallback if the interrupt isn't surfaced as a pending task.
+        st.session_state.pending_questions = [
+            {"gap_id": pq.gap_id, "text": pq.text}
+            for pq in values["pending_user_questions"]
+        ]
+        st.session_state.finished = False
+    else:
+        st.session_state.pending_questions = None
+        st.session_state.finished = bool(values.get("done"))
 
 
 def score_section(gaps: list[dict]) -> float:
@@ -233,12 +282,42 @@ def score_section(gaps: list[dict]) -> float:
 # ---------------------------------------------------------------------------
 
 
+def render_runs_history() -> None:
+    """List the current user's runs; clicking one reopens it from Postgres."""
+    st.sidebar.subheader("Mes runs")
+    try:
+        runs = db.list_runs(USERNAME)
+    except Exception as exc:  # noqa: BLE001 - history is a convenience, not critical
+        st.sidebar.warning(f"Historique indisponible : {exc}")
+        return
+    if not runs:
+        st.sidebar.caption("Aucun run enregistré pour l'instant.")
+        return
+    status_icon = {"running": "🟡", "awaiting_input": "🟠", "finished": "🟢"}
+    for run in runs:
+        tid = str(run["thread_id"])
+        icon = status_icon.get(run.get("status"), "⚪")
+        label = f"{icon} {run.get('title') or tid[:8]}"
+        active = tid == st.session_state.get("thread_id")
+        if st.sidebar.button(
+            label, key=f"open_run_{tid}", width="stretch",
+            disabled=active, type="secondary",
+        ):
+            load_run_into_session(tid)
+            st.rerun()
+
+
 def render_sidebar(settings) -> tuple[str, LoopSettings, bool, dict[str, bool]]:
+    st.sidebar.caption(f"Connecté : **{st.session_state.get('name', USERNAME)}**")
+    authenticator.logout("Se déconnecter", location="sidebar")
+    render_runs_history()
+    st.sidebar.divider()
     st.sidebar.header("Configuration")
 
     cdc_file = st.sidebar.file_uploader("CDC initial (markdown/texte/PDF)", type=["md", "txt", "pdf"])
     cdc_text = ""
     if cdc_file is not None:
+        st.session_state["_cdc_title"] = cdc_file.name
         if cdc_file.name.lower().endswith(".pdf"):
             from src.rag import _extract_text_from_path
 
@@ -305,6 +384,12 @@ def start_run(cdc_text: str, loop_settings: LoopSettings, skip_map: dict[str, bo
     st.session_state.finished = False
     st.session_state.step_timeline = []
     telemetry.reset(st.session_state.thread_id)
+
+    title = st.session_state.get("_cdc_title") or f"Run {st.session_state.thread_id[:8]}"
+    try:
+        db.create_run(st.session_state.thread_id, USERNAME, title)
+    except Exception as exc:  # noqa: BLE001 - surfaced but non-fatal for the run
+        st.warning(f"Impossible d'enregistrer le run dans l'historique : {exc}")
 
     sections = load_sections()
     section_statuses = {
@@ -750,8 +835,25 @@ def render_debug_tab(values: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _autoload_last_run() -> None:
+    """On a fresh session (e.g. after reload), reopen the user's most recent
+    run so a page refresh lands back on the active run without re-selecting."""
+    if st.session_state.get("_autoload_done"):
+        return
+    st.session_state["_autoload_done"] = True
+    if st.session_state.get("thread_id"):
+        return
+    try:
+        runs = db.list_runs(USERNAME)
+    except Exception:  # noqa: BLE001 - autoload is best-effort
+        return
+    if runs:
+        load_run_into_session(str(runs[0]["thread_id"]))
+
+
 def main() -> None:
     init_session_state()
+    _autoload_last_run()
     settings = load_settings()
 
     st.title("Assistant CDC IA")
