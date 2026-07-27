@@ -19,17 +19,29 @@ The page is split into two tabs:
   clock went (per node, per LLM call), the raw gap table, the turn log, and
   the checkpointer snapshot.
 
+## Authentication
+
+Access is gated by [`streamlit-authenticator`](https://github.com/mkhorasani/Streamlit-Authenticator)
+against a **closed, admin-managed** user list in `st.secrets`
+(`[credentials.usernames.*]`, bcrypt-hashed passwords — no self-registration).
+Login is persisted in a signed JWT **cookie** (30-day expiry), so a reload, a
+new tab, or a server restart keep the user logged in — unlike the old
+`st.session_state`-only password gate. The logged-in `username` scopes every
+run to its owner. See `_get_authenticator()` / the gate at the top of
+`src/app.py`, and add users with `scripts/hash_password.py`.
+
 ## The core design constraint: no in-memory state
 
 The graph is compiled once per Streamlit process (`get_graph()`, decorated
 with `@st.cache_resource`), but **all run state lives in the LangGraph
-checkpointer** (`MemorySaver`), keyed by a `thread_id` stored in
-`st.session_state`. Every Streamlit rerun (which happens on every widget
-interaction) re-reads state from the checkpointer via
-`get_graph().get_state(config)` rather than trusting anything held in Python
-globals between reruns. This is what makes closing and reopening the browser
-tab mid-run recoverable — as long as `st.session_state.thread_id` survives
-(it does, since it's part of the Streamlit session, not a Python global).
+checkpointer** — a `PostgresSaver` backed by Supabase (`src/db.py`), keyed by a
+`thread_id`. Every Streamlit rerun (which happens on every widget interaction)
+re-reads state via `get_graph().get_state(config)` rather than trusting anything
+held in Python globals between reruns. Because checkpoints are now durable in
+Postgres, runs survive server restarts: a `runs` table maps each `thread_id` to
+its owning `username`, the sidebar's **Mes runs** list lets a user reopen any
+past run (`load_run_into_session()`), and a fresh session auto-reopens the most
+recent one (`_autoload_last_run()`).
 
 `current_config()` returns `{"configurable": {"thread_id": ...}}` — the
 standard LangGraph checkpointer key, threaded through every `stream`/

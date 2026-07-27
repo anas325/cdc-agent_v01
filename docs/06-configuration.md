@@ -112,6 +112,8 @@ dependencies and what they're for:
 | Package | Role |
 |---|---|
 | `langgraph` | State machine / orchestration engine (`StateGraph`, `interrupt`, `MemorySaver`) |
+| `langgraph-checkpoint-postgres`, `psycopg[binary,pool]` | Durable checkpointer in Supabase Postgres (`src/db.py`) — replaces the in-RAM `MemorySaver` for the app |
+| `streamlit-authenticator` | Cookie-persisted login against a closed user list in `st.secrets` |
 | `langchain-core`, `langchain-ollama`, `langchain-anthropic` | Chat model abstraction (`BaseChatModel`) behind `src/llm.py` |
 | `ollama` | Python client, used indirectly via langchain-ollama / embedding healthcheck |
 | `anthropic` | Anthropic SDK, pulled in transitively for the Anthropic provider path |
@@ -128,6 +130,13 @@ Install/run:
 uv sync
 uv run streamlit run src/app.py
 ```
+
+Before first run, copy `.streamlit/secrets.toml.example` to
+`.streamlit/secrets.toml` and fill in `COOKIE_KEY`, `SUPABASE_DB_URL` (use the
+Supabase **session** pooler / direct connection, not the transaction pooler on
+6543), and one `[credentials.usernames.<login>]` block per user (hash passwords
+with `uv run python scripts/hash_password.py`). On Streamlit Cloud, paste the
+same content into the app's Secrets. `src/.env` still holds the LLM/API keys.
 
 ## `langgraph.json`
 

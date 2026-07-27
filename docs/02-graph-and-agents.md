@@ -17,9 +17,12 @@ START -> ingest -> initial_scan -> orchestrator -> (route_after_orchestrator)
     -> END  (blocking gaps hit max_turns)
 ```
 
-Compiled with `MemorySaver()` as checkpointer — state is durable per
-`thread_id`, which is what makes the Streamlit app's interrupt/resume cycle
-(and surviving a tab close) work. See [`build_graph()`](../src/graph.py).
+`build_graph(checkpointer=None)` takes an optional checkpointer, defaulting to
+`MemorySaver()` (used by tests and `langgraph dev`). The Streamlit app passes a
+`PostgresSaver` backed by Supabase (see [`src/db.py`](../src/db.py)), so state is
+durable per `thread_id` **across server restarts** — this is what makes the app's
+interrupt/resume cycle, tab close, and per-user run history work. See
+[`build_graph()`](../src/graph.py).
 
 ### `route_after_orchestrator`
 

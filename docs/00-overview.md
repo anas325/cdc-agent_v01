@@ -54,7 +54,7 @@ the repo root, which is a useful secondary reference for intent/rationale.
  Streamlit UI (src/app.py)
         │  uploads initial CDC + source docs, starts/resumes a run
         ▼
- LangGraph (src/graph.py)              persisted via MemorySaver (thread_id = Streamlit session)
+ LangGraph (src/graph.py)              persisted in Supabase Postgres (PostgresSaver, keyed by thread_id)
         │
         ├─ ingest ───────────────────── load sections.yaml, ingest data/source_docs/ into Chroma
         │
@@ -110,8 +110,9 @@ src/
   context_utils.py             # renders state into LLM-readable text blocks
   llm.py                       # get_llm() factory + call_structured()
   rag.py                       # Chroma ingestion + retrieval
+  db.py                        # Supabase Postgres: checkpointer + per-user runs index
   graph.py                     # StateGraph wiring — the orchestration backbone
-  app.py                       # Streamlit UI, the actual entrypoint
+  app.py                       # Streamlit UI, the actual entrypoint (auth + run history)
   agents/
     orchestrator.py            # section picking, loop limits, question dedup gate
     gap_finder.py               # detects gaps/ambiguities/contradictions per section or fresh item
