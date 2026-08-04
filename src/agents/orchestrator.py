@@ -104,7 +104,7 @@ Réponds :
   rewritten_question ne portant que sur la partie manquante.
 - Sinon (rien ne répond), laisse already_resolved=false, partially_resolved=false,
   rewritten_question="" (la question candidate sera posée telle quelle)."""
-    return call_structured(prompt, DedupVerdict)
+    return call_structured(prompt, DedupVerdict, prompt_id="orchestrator.dedup")
 
 
 

@@ -57,10 +57,16 @@ def get_collection():
     return client.get_or_create_collection(name=COLLECTION_NAME, embedding_function=ef)
 
 
-def _extract_text_from_path(path: Path) -> str:
+def _extract_pages(path: Path) -> list[tuple[int | None, str]]:
+    """Extract a document as (page_number, text) pairs.
+
+    PDFs yield one pair per page (1-based) so the page number survives into the
+    chunk id and metadata, and a RAG answer can cite "doc.pdf, page 14". Flat
+    formats have no pagination and yield a single (None, text) pair.
+    """
     suffix = path.suffix.lower()
     if suffix in {".md", ".txt"}:
-        return path.read_text(encoding="utf-8", errors="ignore")
+        return [(None, path.read_text(encoding="utf-8", errors="ignore"))]
 
     if suffix == ".pdf":
         try:
@@ -69,14 +75,31 @@ def _extract_text_from_path(path: Path) -> str:
             raise RuntimeError("pypdf is required to ingest PDF files") from exc
 
         reader = PdfReader(str(path))
-        pages = [page.extract_text() or "" for page in reader.pages]
-        return "\n\n".join(page for page in pages if page).strip()
+        return [(i, page.extract_text() or "") for i, page in enumerate(reader.pages, start=1)]
 
     raise ValueError(f"Unsupported document format: {path.suffix}")
 
 
+def extract_document_text(path: Path) -> str:
+    """Whole-document plain text, pages joined — for callers that don't index.
+
+    The Streamlit sidebar uses this to read an uploaded PDF CDC, where page
+    boundaries carry no meaning (the text goes straight to the section splitter).
+    Ingestion uses `_extract_pages` instead, to keep page provenance.
+    """
+    return "\n\n".join(text for _, text in _extract_pages(path) if text.strip()).strip()
+
+
+def _chunk_id(document: str, page: int | None, index: int) -> str:
+    return f"{document}::p{page}::{index}" if page is not None else f"{document}::{index}"
+
+
 def ingest_source_docs(source_dir: Path | None = None) -> int:
-    """(Re)ingest every supported document under data/source_docs/. Returns count of chunks added."""
+    """(Re)ingest every supported document under data/source_docs/. Returns count of chunks added.
+
+    Chunking happens *within* a page, never across pages, so every chunk maps to
+    exactly one page number.
+    """
     settings = load_settings()
     source_dir = source_dir or (ROOT_DIR / settings.rag.source_dir)
     collection = get_collection()
@@ -89,28 +112,59 @@ def ingest_source_docs(source_dir: Path | None = None) -> int:
             continue
 
         try:
-            text = _extract_text_from_path(path)
+            pages = _extract_pages(path)
         except (RuntimeError, ValueError):
             continue
 
-        if not text.strip():
+        if not any(text.strip() for _, text in pages):
             continue
 
-        for i, chunk in enumerate(_chunk_text(text)):
-            chunk_id = f"{path.name}::{i}"
+        chunks = [
+            (page, i, chunk)
+            for page, text in pages
+            if text.strip()
+            for i, chunk in enumerate(_chunk_text(text))
+        ]
+        wanted_ids = {_chunk_id(path.name, page, i) for page, i, _ in chunks}
+        existing_ids -= _purge_stale_chunks(collection, path.name, existing_ids, wanted_ids)
+
+        for page, i, chunk in chunks:
+            chunk_id = _chunk_id(path.name, page, i)
             if chunk_id in existing_ids:
                 continue
-            collection.add(
-                ids=[chunk_id],
-                documents=[chunk],
-                metadatas=[{"source": path.name, "file_type": path.suffix.lower()}],
-            )
+            metadata: dict = {"source": path.name, "file_type": path.suffix.lower()}
+            if page is not None:
+                metadata["page"] = page
+            collection.add(ids=[chunk_id], documents=[chunk], metadatas=[metadata])
             added += 1
     return added
 
 
+def _purge_stale_chunks(
+    collection, document: str, existing_ids: set[str], wanted_ids: set[str]
+) -> set[str]:
+    """Drop chunks of `document` that the current chunking scheme no longer produces.
+
+    Page-aware chunk ids (`doc.pdf::p14::3`) superseded the flat `doc.pdf::3`
+    scheme, so a collection built before that change holds ids that would never
+    be overwritten — leaving the same text indexed twice under two id schemes.
+    Also covers an edited document that now yields fewer chunks. Returns the ids
+    actually removed.
+    """
+    prefix = f"{document}::"
+    stale = {cid for cid in existing_ids if cid.startswith(prefix)} - wanted_ids
+    if stale:
+        collection.delete(ids=sorted(stale))
+    return stale
+
+
 def retrieve(query: str, top_k: int | None = None) -> list[dict]:
-    """Returns list of {content, source, distance} sorted by relevance."""
+    """Returns list of {content, chunk_id, document, source, page, distance, score}.
+
+    `score` is a 0–1 relevance score derived from Chroma's (unbounded) L2
+    distance via 1/(1+d), so it can be shown and thresholded directly.
+    `source` is kept as an alias of `document` for backwards compatibility.
+    """
     settings = load_settings()
     collection = get_collection()
     if collection.count() == 0:
@@ -118,9 +172,22 @@ def retrieve(query: str, top_k: int | None = None) -> list[dict]:
     top_k = top_k or settings.rag.top_k
     results = collection.query(query_texts=[query], n_results=min(top_k, collection.count()))
     hits = []
+    ids = results.get("ids", [[]])[0]
     docs = results.get("documents", [[]])[0]
     metas = results.get("metadatas", [[]])[0]
     dists = results.get("distances", [[]])[0]
-    for doc, meta, dist in zip(docs, metas, dists):
-        hits.append({"content": doc, "source": meta.get("source", "unknown"), "distance": dist})
+    for chunk_id, doc, meta, dist in zip(ids, docs, metas, dists):
+        meta = meta or {}
+        document = meta.get("source", "unknown")
+        hits.append(
+            {
+                "content": doc,
+                "chunk_id": chunk_id,
+                "document": document,
+                "source": document,
+                "page": meta.get("page"),
+                "distance": dist,
+                "score": 1.0 / (1.0 + dist) if dist is not None else 0.0,
+            }
+        )
     return hits

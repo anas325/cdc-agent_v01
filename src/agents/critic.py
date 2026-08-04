@@ -11,9 +11,10 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from src.context_utils import format_all_sections_context
+from src.decisions import make_decision
 from src.ids import stable_id
-from src.llm import call_structured
-from src.state import CDCState, Gap
+from src.llm import call_structured, current_model_name
+from src.state import CDCState, DecisionLogEntry, Gap
 
 
 class ContradictionFinding(BaseModel):
@@ -29,6 +30,7 @@ class CriticOutput(BaseModel):
 class CriticResult(BaseModel):
     new_gaps: list[Gap]
     reopened_sections: dict[str, str]  # section_id -> reopen_reason
+    decisions: list[DecisionLogEntry] = Field(default_factory=list)
 
 
 def run_critic(state: CDCState, fresh_item_ids: list[str]) -> CriticResult:
@@ -61,12 +63,13 @@ Cherche spécifiquement :
 Ne signale QUE des contradictions concrètes et vérifiables citant les deux affirmations en
 conflit. Si aucune contradiction n'est trouvée, retourne une liste vide."""
 
-    output = call_structured(prompt, CriticOutput)
+    output = call_structured(prompt, CriticOutput, prompt_id="critic.contradiction")
 
     valid_severities = {"blocking", "important", "nice_to_have"}
 
     new_gaps: list[Gap] = []
     reopened: dict[str, str] = {}
+    decisions: list[DecisionLogEntry] = []
     for finding in output.contradictions:
         severity = finding.severity if finding.severity in valid_severities else "important"
         gap = Gap(
@@ -77,8 +80,23 @@ conflit. Si aucune contradiction n'est trouvée, retourne une liste vide."""
             severity=severity,  # type: ignore[arg-type]
         )
         new_gaps.append(gap)
-        for sid in finding.section_ids:
-            if sid in complete_sections:
-                reopened[sid] = finding.description
+        reopened_here = [sid for sid in finding.section_ids if sid in complete_sections]
+        for sid in reopened_here:
+            reopened[sid] = finding.description
+        decisions.append(
+            make_decision(
+                state,
+                agent="critic",
+                decision_type="contradiction_found",
+                summary=finding.description,
+                prompt_id="critic.contradiction",
+                input_ids=fresh_item_ids,
+                output_ids=[gap.id],
+                model=current_model_name(),
+                severity=severity,
+                section_ids=finding.section_ids,
+                reopened_sections=reopened_here,
+            )
+        )
 
-    return CriticResult(new_gaps=new_gaps, reopened_sections=reopened)
+    return CriticResult(new_gaps=new_gaps, reopened_sections=reopened, decisions=decisions)

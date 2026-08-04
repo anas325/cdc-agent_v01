@@ -48,7 +48,7 @@ class ScriptedLLM:
         self._queues.setdefault(model_cls.__name__, []).extend(responses)
         return self
 
-    def __call__(self, prompt: str, model: type, llm=None, max_retries: int = 2):
+    def __call__(self, prompt: str, model: type, llm=None, max_retries: int = 2, *, prompt_id=None):
         key = model.__name__
         queue = self._queues.get(key)
         if not queue:

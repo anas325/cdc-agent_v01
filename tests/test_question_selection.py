@@ -27,7 +27,7 @@ def draft_calls(monkeypatch) -> list[str]:
     """Records every drafted question; returns the gap description verbatim."""
     seen: list[str] = []
 
-    def fake_draft(prompt: str, model: type, llm=None, max_retries: int = 2):
+    def fake_draft(prompt: str, model: type, llm=None, max_retries: int = 2, *, prompt_id=None):
         seen.append(prompt)
         # The gap description is quoted in the drafting prompt; echo it back so
         # tests can map a question to the gap it came from.
@@ -41,7 +41,7 @@ def draft_calls(monkeypatch) -> list[str]:
 def dedup_passthrough(monkeypatch):
     monkeypatch.setattr(
         "src.agents.orchestrator.call_structured",
-        lambda prompt, model, llm=None, max_retries=2: DedupVerdict(),
+        lambda prompt, model, llm=None, max_retries=2, *, prompt_id=None: DedupVerdict(),
     )
 
 
@@ -179,7 +179,7 @@ def test_exhausted_gap_becomes_assumption_without_drafting(no_rag_hits, draft_ca
 
     monkeypatch.setattr(
         "src.agents.gap_filler.call_structured",
-        lambda prompt, model, llm=None, max_retries=2: AssumptionDraft(assumption_text="ASSUMPTION: défaut."),
+        lambda prompt, model, llm=None, max_retries=2, *, prompt_id=None: AssumptionDraft(assumption_text="ASSUMPTION: défaut."),
     )
     state = make_state([make_gap("spent", "blocking", questions_asked=2)])
 
@@ -221,7 +221,7 @@ def test_dedup_drop_advances_to_next_candidate(no_rag_hits, draft_calls, monkeyp
     ]
     monkeypatch.setattr(
         "src.agents.orchestrator.call_structured",
-        lambda prompt, model, llm=None, max_retries=2: verdicts.pop(0),
+        lambda prompt, model, llm=None, max_retries=2, *, prompt_id=None: verdicts.pop(0),
     )
     state = make_state([make_gap("dropped", "blocking"), make_gap("kept", "important")])
 
@@ -235,7 +235,7 @@ def test_dedup_drop_advances_to_next_candidate(no_rag_hits, draft_calls, monkeyp
 def test_dedup_rewrite_replaces_question_text(no_rag_hits, draft_calls, monkeypatch):
     monkeypatch.setattr(
         "src.agents.orchestrator.call_structured",
-        lambda prompt, model, llm=None, max_retries=2: DedupVerdict(
+        lambda prompt, model, llm=None, max_retries=2, *, prompt_id=None: DedupVerdict(
             partially_resolved=True, rewritten_question="Question reformulée ?"
         ),
     )

@@ -57,6 +57,13 @@ when editing:
 - **Nothing is silently dropped.** User-doesn't-know → an `assumption` ContextItem,
   flagged in the final doc. Context mapped to no section, and contradictions found on a
   final read, land in `output/qa_report.md`.
+- **Every decision is auditable.** Each `ContextItem` carries its provenance
+  (`created_by`, `evidence` chunks with document/page, `confidence`,
+  `validation_status`, `model`, `prompt_version`); each meaningful agent decision
+  appends a `DecisionLogEntry` to `state["decision_log"]` (checkpointed, dumped to
+  `output/decision_log.jsonl`). Agents build these and return them — only `graph.py`
+  writes them into state. Every `call_structured` passes a `prompt_id` registered in
+  `src/prompts.py`; **bump its version there when you edit a prompt's wording.**
 
 ### Graph flow
 

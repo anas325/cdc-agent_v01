@@ -24,10 +24,11 @@ from src.agents import orchestrator as orch
 from src.agents import synthesizer as synthesizer_agent
 from src import telemetry
 from src.config import load_sections, load_settings
-from src.llm import map_structured
+from src.decisions import make_decision, now_iso
+from src.llm import current_model_name, map_structured
 from src.ids import stable_id
 from src.rag import ingest_source_docs
-from src.state import CDCState, ContextItem, SectionStatus, TurnLogEntry
+from src.state import CDCState, ContextItem, DecisionLogEntry, SectionStatus, TurnLogEntry
 from src.utils.cdc_sections import split_cdc_by_sections
 
 
@@ -38,6 +39,15 @@ def _log(state: CDCState, agent: str, summary: str, **details) -> TurnLogEntry:
     if elapsed is not None:
         details = {**details, "_elapsed_s": round(elapsed, 3)}
     return TurnLogEntry(turn=state.get("turn", 0), agent=agent, summary=summary, details=details)
+
+
+def _decide(state: CDCState, agent: str, decision_type: str, summary: str, **kw) -> DecisionLogEntry:
+    """Sibling of _log for the machine-readable audit trail.
+
+    Nodes that get decisions back from a pure agent just pass them through under
+    the `decision_log` key; this is for the ones that decide inline.
+    """
+    return make_decision(state, agent=agent, decision_type=decision_type, summary=summary, **kw)
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +73,15 @@ def ingest_node(state: CDCState) -> dict:
     initial_text = state.get("initial_cdc_text", "") or ""
     context_items: list[ContextItem] = []
     ingest_details: dict = {}
+    # The initial CDC is the author's own text: nothing was inferred, so it is
+    # accepted as-is with full confidence and attributed to the system (the
+    # splitter), not to an LLM.
+    initial_provenance = {
+        "created_by": "system",
+        "timestamp": now_iso(),
+        "confidence": 1.0,
+        "validation_status": "accepted",
+    }
     if initial_text.strip():
         split = split_cdc_by_sections(initial_text, sections)
         if split.matched_any:
@@ -75,6 +94,7 @@ def ingest_node(state: CDCState) -> dict:
                         section_ids=[sid],
                         turn_added=0,
                         fresh=False,
+                        **initial_provenance,
                     )
                 )
             # The index keeps two byte-identical unmatched chunks distinct
@@ -88,6 +108,7 @@ def ingest_node(state: CDCState) -> dict:
                         section_ids=[],
                         turn_added=0,
                         fresh=False,
+                        **initial_provenance,
                     )
                 )
             ingest_details = {
@@ -103,6 +124,7 @@ def ingest_node(state: CDCState) -> dict:
                     section_ids=[s.id for s in sections],
                     turn_added=0,
                     fresh=False,
+                    **initial_provenance,
                 )
             )
             ingest_details = {"matched_sections": [], "unmatched_chunks": 0}
@@ -148,6 +170,7 @@ def initial_scan_node(state: CDCState) -> dict:
     statuses = state.get("section_statuses") or {}
     gaps = list(state.get("gaps") or [])
     logs: list[TurnLogEntry] = []
+    decisions: list[DecisionLogEntry] = []
 
     # Ces appels par section sont indépendants : on les lance en parallèle (le
     # gros poste de temps du run). Contrairement à la boucle série d'origine,
@@ -165,6 +188,7 @@ def initial_scan_node(state: CDCState) -> dict:
     )
     for sec, result in zip(scan_sections, results):
         gaps.extend(result.new_gaps)
+        decisions.extend(result.decisions)
         logs.append(
             _log(
                 state,
@@ -175,7 +199,7 @@ def initial_scan_node(state: CDCState) -> dict:
         )
 
     logs.append(_log(state, "initial_scan", f"Scan initial terminé : {len(gaps)} lacune(s) au total."))
-    return {"gaps": gaps, "turn_log": logs}
+    return {"gaps": gaps, "turn_log": logs, "decision_log": decisions}
 
 
 def orchestrator_node(state: CDCState) -> dict:
@@ -201,9 +225,25 @@ def orchestrator_node(state: CDCState) -> dict:
 
     limits = orch.apply_loop_limits({**state, "turn": turn})
     if limits.hit_limit:
+        at_limit = {**state, "turn": turn}
         if limits.blocking_stop:
             logs.append(_log(state, "orchestrator", "Arrêt : lacunes bloquantes non résolues à la limite de tours."))
-            return {"turn": turn, "done": True, "stop_reason": limits.stop_message, "turn_log": logs}
+            return {
+                "turn": turn,
+                "done": True,
+                "stop_reason": limits.stop_message,
+                "turn_log": logs,
+                "decision_log": [
+                    _decide(
+                        at_limit,
+                        "orchestrator",
+                        "loop_limit_applied",
+                        limits.stop_message,
+                        outcome="blocking_stop",
+                        max_turns=state["loop_settings"].max_turns,
+                    )
+                ],
+            }
         downgraded_ids = set(limits.downgraded_gap_ids)
         gaps = [
             g.model_copy(update={"status": "deferred"}) if g.id in downgraded_ids else g for g in state["gaps"]
@@ -211,7 +251,24 @@ def orchestrator_node(state: CDCState) -> dict:
         logs.append(
             _log(state, "orchestrator", f"Limite de tours atteinte : {len(downgraded_ids)} lacune(s) reportée(s).")
         )
-        return {"turn": turn, "gaps": gaps, "current_mode": "section", "current_section_id": None, "turn_log": logs}
+        return {
+            "turn": turn,
+            "gaps": gaps,
+            "current_mode": "section",
+            "current_section_id": None,
+            "turn_log": logs,
+            "decision_log": [
+                _decide(
+                    at_limit,
+                    "orchestrator",
+                    "loop_limit_applied",
+                    f"Limite de {state['loop_settings'].max_turns} tours atteinte : "
+                    f"{len(downgraded_ids)} lacune(s) non bloquante(s) reportée(s).",
+                    input_ids=sorted(downgraded_ids),
+                    outcome="deferred_non_blocking",
+                )
+            ],
+        }
 
     next_section = orch.pick_next_section({**state, "turn": turn})
     if next_section is None:
@@ -247,7 +304,7 @@ def gap_finder_node(state: CDCState) -> dict:
     gaps = [g.model_copy(update={"status": "resolved"}) if g.id in resolved_ids else g for g in gaps]
     gaps.extend(result.new_gaps)
 
-    updates: dict = {"gaps": gaps}
+    updates: dict = {"gaps": gaps, "decision_log": list(result.decisions)}
     logs = [
         _log(
             state,
@@ -264,6 +321,19 @@ def gap_finder_node(state: CDCState) -> dict:
         statuses[section_id] = SectionStatus(section_id=section_id, status=new_status)
         updates["section_statuses"] = statuses
         logs.append(_log(state, "gap_finder", f"Section {section_id} -> statut {new_status}."))
+        updates["decision_log"].append(
+            _decide(
+                state,
+                "gap_finder",
+                "section_status_changed",
+                f"Section {section_id} -> statut {new_status}.",
+                input_ids=[section_id],
+                # Statut dérivé de façon déterministe (aucune lacune bloquante ou
+                # importante ouverte), pas d'un jugement du LLM.
+                rule="no_open_blocking_or_important_gaps",
+                new_status=new_status,
+            )
+        )
 
     updates["turn_log"] = logs
     return updates
@@ -290,13 +360,21 @@ def gap_filler_node(state: CDCState) -> dict:
     # Every returned question is asked this turn — fill_gaps stops at the batch cap.
     for pq in result.pending_questions:
         g = gaps_by_id[pq.gap_id]
-        gaps_by_id[pq.gap_id] = g.model_copy(update={"questions_asked": g.questions_asked + 1})
+        gaps_by_id[pq.gap_id] = g.model_copy(
+            update={
+                "questions_asked": g.questions_asked + 1,
+                # Keep the question on the gap itself, so a gap record is
+                # self-contained for audit even without the asked_questions list.
+                "question_text": result.question_texts.get(pq.gap_id, pq.text),
+            }
+        )
 
     return {
         "context_items": list(state["context_items"]) + result.new_context_items,
         "gaps": list(gaps_by_id.values()),
         "pending_user_questions": result.pending_questions,
         "active_fresh_item_ids": [it.id for it in result.new_context_items],
+        "decision_log": list(result.decisions),
         "turn_log": [
             _log(
                 state,
@@ -335,6 +413,7 @@ def integrate_answers_node(state: CDCState) -> dict:
     gaps_by_id = {g.id: g for g in state["gaps"]}
     new_items: list[ContextItem] = []
     asked_this_turn = []
+    decisions: list[DecisionLogEntry] = []
 
     for pq in batch:
         raw = answers.get(pq.gap_id, {})
@@ -347,6 +426,20 @@ def integrate_answers_node(state: CDCState) -> dict:
         if skipped or not text.strip():
             item = gap_filler_agent.build_assumption(state, gap, turn)
             gaps_by_id[gap.id] = gap.model_copy(update={"status": "assumed"})
+            decisions.append(
+                _decide(
+                    state,
+                    "integrate_answers",
+                    "assumption_built",
+                    f"L'utilisateur n'a pas répondu à {gap.id} : hypothèse par défaut retenue.",
+                    prompt_id="gap_filler.assumption",
+                    input_ids=[gap.id],
+                    output_ids=[item.id],
+                    confidence=item.confidence,
+                    model=item.model,
+                    reason="user_skipped" if skipped else "empty_answer",
+                )
+            )
         else:
             item = ContextItem(
                 # Stable so that re-running with the same answers keeps
@@ -358,9 +451,27 @@ def integrate_answers_node(state: CDCState) -> dict:
                 linked_gap_id=gap.id,
                 turn_added=turn,
                 fresh=True,
+                # A human stakeholder answered directly: authoritative by
+                # definition, so no LLM model/prompt is attributed to it.
+                created_by="user",
+                timestamp=now_iso(),
+                confidence=1.0,
+                validation_status="accepted",
             )
             gaps_by_id[gap.id] = gap.model_copy(
                 update={"status": "user_answered", "answer_item_ids": gap.answer_item_ids + [item.id]}
+            )
+            decisions.append(
+                _decide(
+                    state,
+                    "integrate_answers",
+                    "answer_integrated",
+                    f"Réponse utilisateur intégrée pour {gap.id}.",
+                    input_ids=[gap.id],
+                    output_ids=[item.id],
+                    confidence=1.0,
+                    question=pq.text,
+                )
             )
         new_items.append(item)
 
@@ -370,6 +481,7 @@ def integrate_answers_node(state: CDCState) -> dict:
         "asked_questions": list(state["asked_questions"]) + asked_this_turn,
         "pending_user_questions": [],
         "active_fresh_item_ids": list(set(state.get("active_fresh_item_ids", []) + [it.id for it in new_items])),
+        "decision_log": decisions,
         "turn_log": [_log(state, "integrate_answers", f"{len(new_items)} réponse(s) intégrée(s).")],
     }
 
@@ -393,17 +505,23 @@ def _skip_section(state: CDCState, section_id: str) -> dict:
         else:
             gaps.append(g)
 
+    summary = f"Section {section_id} ignorée par l'utilisateur ; {deferred} lacune(s) reportée(s)."
     return {
         "gaps": gaps,
         "section_statuses": statuses,
         "pending_user_questions": [],
         "active_fresh_item_ids": [],
-        "turn_log": [
-            _log(
+        "turn_log": [_log(state, "integrate_answers", summary, section_id=section_id)],
+        "decision_log": [
+            _decide(
                 state,
                 "integrate_answers",
-                f"Section {section_id} ignorée par l'utilisateur ; {deferred} lacune(s) reportée(s).",
-                section_id=section_id,
+                "section_status_changed",
+                summary,
+                input_ids=[section_id],
+                new_status="skipped",
+                deferred_gaps=deferred,
+                decided_by="user",
             )
         ],
     }
@@ -419,7 +537,12 @@ def critic_node(state: CDCState) -> dict:
         statuses[sid] = SectionStatus(section_id=sid, status="reopened", reopen_reason=reason)
 
     logs = [_log(state, "critic", f"{len(result.new_gaps)} incohérence(s) détectée(s), {len(result.reopened_sections)} section(s) rouverte(s).")]
-    return {"gaps": gaps, "section_statuses": statuses, "turn_log": logs}
+    return {
+        "gaps": gaps,
+        "section_statuses": statuses,
+        "turn_log": logs,
+        "decision_log": list(result.decisions),
+    }
 
 
 def synthesizer_node(state: CDCState) -> dict:
@@ -428,6 +551,19 @@ def synthesizer_node(state: CDCState) -> dict:
         "_qmd_text": qmd_text,
         "_mapped_items": mapped,
         "turn_log": [_log(state, "synthesizer", "Document CDC final généré (.qmd).")],
+        "decision_log": [
+            _decide(
+                state,
+                "synthesizer",
+                "section_synthesized",
+                f"Section {sid} rédigée à partir de {len(item_ids)} élément(s) de contexte.",
+                prompt_id="synthesizer.slot",
+                input_ids=item_ids,
+                output_ids=[sid],
+                model=current_model_name(),
+            )
+            for sid, item_ids in mapped.items()
+        ],
     }
 
 
@@ -437,13 +573,32 @@ def final_validator_node(state: CDCState) -> dict:
     unmapped = final_validator_agent.find_unmapped_context(state, mapped)
     contradictions = final_validator_agent.find_final_contradictions(qmd_text) if qmd_text else []
     report_path = final_validator_agent.write_qa_report(state, unmapped, contradictions)
+
+    decision = _decide(
+        state,
+        "final_validator",
+        "final_check",
+        f"QA finale : {len(unmapped)} élément(s) non intégré(s), {len(contradictions)} incohérence(s).",
+        prompt_id="final_validator.contradictions" if qmd_text else None,
+        input_ids=[it.id for it in unmapped],
+        model=current_model_name() if qmd_text else None,
+        contradictions=contradictions,
+        qa_report=str(report_path),
+    )
+    # Written last, and with this node's own decision included, so the dump is
+    # the complete trail rather than everything-but-the-final-check.
+    log_path = final_validator_agent.write_decision_log(
+        {**state, "decision_log": list(state.get("decision_log") or []) + [decision]}
+    )
     return {
         "done": True,
+        "decision_log": [decision],
         "turn_log": [
             _log(
                 state,
                 "final_validator",
-                f"QA finale : {len(unmapped)} élément(s) non intégré(s), {len(contradictions)} incohérence(s). Rapport: {report_path}",
+                f"QA finale : {len(unmapped)} élément(s) non intégré(s), {len(contradictions)} incohérence(s). "
+                f"Rapport: {report_path} · Journal de décisions: {log_path}",
             )
         ],
     }

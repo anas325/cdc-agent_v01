@@ -47,7 +47,7 @@ Description de la section : {section.description}
 {format_context_items(normal_items)}
 
 Rédige uniquement le corps de la section (pas de titre h1, le titre est déjà géré ailleurs)."""
-    draft = call_structured(prompt, SlotDraft)
+    draft = call_structured(prompt, SlotDraft, prompt_id="synthesizer.slot")
     prose = draft.prose.strip()
 
     if assumptions:

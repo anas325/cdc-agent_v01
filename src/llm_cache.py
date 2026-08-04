@@ -34,8 +34,22 @@ def cache_dir() -> Path:
     return Path(override) if override else _DEFAULT_DIR
 
 
-def cache_key(*, prompt: str, provider: str, model: str, schema_name: str) -> str:
-    payload = "\x1f".join((prompt, provider, model, schema_name))
+def cache_key(
+    *,
+    prompt: str,
+    provider: str,
+    model: str,
+    schema_name: str,
+    prompt_version: str | None = None,
+) -> str:
+    """Key a cached result on everything that could change the answer.
+
+    `prompt_version` is included even though the prompt text is already in the
+    payload: a prompt built from a template whose *surrounding logic* changed
+    (different context selection, say) can produce the same string for one input
+    yet need re-running — bumping the version in src/prompts.py invalidates it.
+    """
+    payload = "\x1f".join((prompt, provider, model, schema_name, prompt_version or ""))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

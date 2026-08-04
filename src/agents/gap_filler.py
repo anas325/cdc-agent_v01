@@ -13,10 +13,25 @@ from pydantic import BaseModel, Field
 
 from src.agents import orchestrator as orch
 from src.context_utils import format_context_for_sections
+from src.decisions import (
+    clamp_confidence,
+    evidence_from_hit,
+    make_decision,
+    now_iso,
+    validation_for,
+)
 from src.ids import stable_id
-from src.llm import call_structured
+from src.llm import call_structured, current_model_name
+from src.prompts import version as prompt_version
 from src.rag import retrieve
-from src.state import CDCState, ContextItem, Gap, PendingQuestion
+from src.state import (
+    CDCState,
+    ContextItem,
+    DecisionLogEntry,
+    EvidenceGrade,
+    Gap,
+    PendingQuestion,
+)
 
 _SEVERITY_ORDER = {"blocking": 0, "important": 1, "nice_to_have": 2}
 
@@ -56,6 +71,10 @@ def _pool_sort_key(gap: Gap, section_rank: dict[str, int], n_sections: int):
 class RagGrade(BaseModel):
     sufficient: bool
     answer_summary: str = ""
+    # Auto-évaluation du LLM, utilisée comme score opérationnel (pas une
+    # probabilité) : elle pilote validation_status et l'affichage UI.
+    confidence: float = 0.0
+    evidence_grade: EvidenceGrade = "insufficient"
 
 
 class QuestionDraft(BaseModel):
@@ -64,6 +83,7 @@ class QuestionDraft(BaseModel):
 
 class AssumptionDraft(BaseModel):
     assumption_text: str = Field(description="Must start with 'ASSUMPTION:' and state a concrete default.")
+    confidence: float = 0.0
 
 
 class FillResult(BaseModel):
@@ -73,10 +93,21 @@ class FillResult(BaseModel):
     gap_updates: dict[str, str] = Field(default_factory=dict)  # gap_id -> new status
     rag_attempted_gap_ids: list[str] = Field(default_factory=list)
     resolved_by: dict[str, str] = Field(default_factory=dict)  # gap_id -> answering context item id
+    question_texts: dict[str, str] = Field(default_factory=dict)  # gap_id -> question asked
+    decisions: list[DecisionLogEntry] = Field(default_factory=list)
+
+
+def _format_hit(hit: dict) -> str:
+    """Cite a retrieved chunk with its document and page, so the grader can too."""
+    page = hit.get("page")
+    where = f"{hit.get('document', hit.get('source', 'inconnu'))}"
+    if page is not None:
+        where += f", p. {page}"
+    return f"[{where}] {hit['content']}"
 
 
 def _grade_rag_hits(gap: Gap, hits: list[dict]) -> RagGrade:
-    hits_text = "\n\n".join(f"[{h['source']}] {h['content']}" for h in hits)
+    hits_text = "\n\n".join(_format_hit(h) for h in hits)
     prompt = f"""Un cahier des charges présente la lacune suivante :
 "{gap.description}" (catégorie={gap.category}, sévérité={gap.severity})
 
@@ -85,8 +116,16 @@ Voici des extraits de documents de référence récupérés par recherche séman
 
 Ces extraits répondent-ils de façon SUFFISANTE et PRÉCISE à la lacune, sans ambiguïté restante ?
 Si oui, résume la réponse concrète à retenir (answer_summary). Si les extraits sont hors-sujet,
-partiels, ou n'apportent pas de réponse actionnable, réponds sufficient=false."""
-    return call_structured(prompt, RagGrade)
+partiels, ou n'apportent pas de réponse actionnable, réponds sufficient=false.
+
+Indique aussi :
+- evidence_grade : "sufficient" (les extraits répondent pleinement), "partial" (ils apportent
+  un élément de réponse mais laissent une ambiguïté), "insufficient" (hors-sujet ou muets).
+- confidence : un score entre 0.0 et 1.0 reflétant ta certitude que la réponse retenue est
+  correcte et actionnable (≥ 0.80 = haute certitude, 0.50–0.79 = moyenne, < 0.50 = faible).
+  Sois honnête : une confiance surévaluée fait accepter automatiquement une réponse fausse."""
+    grade = call_structured(prompt, RagGrade, prompt_id="gap_filler.rag_grade")
+    return grade.model_copy(update={"confidence": clamp_confidence(grade.confidence) or 0.0})
 
 
 def _draft_question(state: CDCState, gap: Gap) -> str:
@@ -106,7 +145,7 @@ lever cette ambiguïté. La question DOIT :
   "pouvez-vous préciser le périmètre ?"),
 - si c'est une contradiction, nommer explicitement les deux affirmations qui se contredisent,
 - être formulée en français, courte, directe, à choix ouvert."""
-    return call_structured(prompt, QuestionDraft).question_text
+    return call_structured(prompt, QuestionDraft, prompt_id="gap_filler.question").question_text
 
 
 def fill_gaps(state: CDCState, turn: int, max_batch: int, max_per_gap: int) -> FillResult:
@@ -141,8 +180,24 @@ def fill_gaps(state: CDCState, turn: int, max_batch: int, max_per_gap: int) -> F
         # Gap has exhausted its question budget: settle it with a default assumption
         # rather than spending a drafting call on a question we can't ask.
         if gap.questions_asked >= max_per_gap:
-            result.new_context_items.append(build_assumption(state, gap, turn))
+            item = build_assumption(state, gap, turn)
+            result.new_context_items.append(item)
             result.gap_updates[gap.id] = "assumed"
+            result.decisions.append(
+                make_decision(
+                    state,
+                    agent="gap_filler",
+                    decision_type="assumption_built",
+                    summary=f"Budget de questions épuisé : hypothèse par défaut retenue pour {gap.id}.",
+                    prompt_id="gap_filler.assumption",
+                    input_ids=[gap.id],
+                    output_ids=[item.id],
+                    confidence=item.confidence,
+                    model=item.model,
+                    reason="question_budget_exhausted",
+                    questions_asked=gap.questions_asked,
+                )
+            )
             continue
 
         if not gap.rag_attempted:
@@ -150,6 +205,8 @@ def fill_gaps(state: CDCState, turn: int, max_batch: int, max_per_gap: int) -> F
             hits = retrieve(gap.description)
             if hits:
                 grade = _grade_rag_hits(gap, hits)
+                evidence = [evidence_from_hit(h) for h in hits]
+                evidence_ids = [ev.chunk_id for ev in evidence]
                 if grade.sufficient:
                     item = ContextItem(
                         id=stable_id("ctx", "rag", gap.id, grade.answer_summary),
@@ -159,10 +216,48 @@ def fill_gaps(state: CDCState, turn: int, max_batch: int, max_per_gap: int) -> F
                         linked_gap_id=gap.id,
                         turn_added=turn,
                         fresh=True,
+                        created_by="rag",
+                        timestamp=now_iso(),
+                        evidence=evidence,
+                        evidence_grade=grade.evidence_grade,
+                        confidence=grade.confidence,
+                        validation_status=validation_for(grade.confidence),
+                        model=current_model_name(),
+                        prompt_version=prompt_version("gap_filler.rag_grade"),
                     )
                     result.new_context_items.append(item)
                     result.gap_updates[gap.id] = "rag_answered"
+                    result.decisions.append(
+                        make_decision(
+                            state,
+                            agent="gap_filler",
+                            decision_type="rag_answer",
+                            summary=f"Lacune {gap.id} résolue par la documentation : {grade.answer_summary}",
+                            prompt_id="gap_filler.rag_grade",
+                            input_ids=[gap.id],
+                            output_ids=[item.id],
+                            evidence_ids=evidence_ids,
+                            confidence=grade.confidence,
+                            model=current_model_name(),
+                            evidence_grade=grade.evidence_grade,
+                            validation_status=item.validation_status,
+                        )
+                    )
                     continue
+                result.decisions.append(
+                    make_decision(
+                        state,
+                        agent="gap_filler",
+                        decision_type="rag_rejected",
+                        summary=f"Extraits jugés insuffisants pour {gap.id} : passage à une question.",
+                        prompt_id="gap_filler.rag_grade",
+                        input_ids=[gap.id],
+                        evidence_ids=evidence_ids,
+                        confidence=grade.confidence,
+                        model=current_model_name(),
+                        evidence_grade=grade.evidence_grade,
+                    )
+                )
 
         question_text = _draft_question(state, gap)
 
@@ -170,11 +265,51 @@ def fill_gaps(state: CDCState, turn: int, max_batch: int, max_per_gap: int) -> F
         if verdict.already_resolved and verdict.resolved_by_item_id:
             result.gap_updates[gap.id] = "resolved"
             result.resolved_by[gap.id] = verdict.resolved_by_item_id
+            result.decisions.append(
+                make_decision(
+                    state,
+                    agent="gap_filler",
+                    decision_type="question_deduped",
+                    summary=f"Question non posée pour {gap.id} : le contexte existant y répond déjà.",
+                    prompt_id="orchestrator.dedup",
+                    input_ids=[gap.id, verdict.resolved_by_item_id],
+                    model=current_model_name(),
+                    candidate_question=question_text,
+                )
+            )
             continue
         if verdict.partially_resolved and verdict.rewritten_question:
+            result.decisions.append(
+                make_decision(
+                    state,
+                    agent="gap_filler",
+                    decision_type="question_deduped",
+                    summary=f"Question de {gap.id} reformulée sur la seule partie non couverte.",
+                    prompt_id="orchestrator.dedup",
+                    input_ids=[gap.id],
+                    model=current_model_name(),
+                    original_question=question_text,
+                    rewritten_question=verdict.rewritten_question,
+                )
+            )
             question_text = verdict.rewritten_question
 
         result.pending_questions.append(PendingQuestion(gap_id=gap.id, text=question_text))
+        result.question_texts[gap.id] = question_text
+        result.decisions.append(
+            make_decision(
+                state,
+                agent="gap_filler",
+                decision_type="question_drafted",
+                summary=f"Question posée à l'utilisateur pour {gap.id} : {question_text}",
+                prompt_id="gap_filler.question",
+                input_ids=[gap.id],
+                model=current_model_name(),
+                severity=gap.severity,
+                category=gap.category,
+                rag_attempted=gap.rag_attempted or gap.id in result.rag_attempted_gap_ids,
+            )
+        )
 
     return result
 
@@ -190,8 +325,12 @@ CONTEXTE PERTINENT (sections concernées par la lacune) :
 
 Propose une hypothèse par défaut raisonnable (pragmatique, standard du secteur) pour combler
 cette lacune, afin que le développement puisse démarrer. Le texte DOIT commencer par
-"ASSUMPTION:" suivi d'une phrase concrète et actionnable en français."""
-    draft = call_structured(prompt, AssumptionDraft)
+"ASSUMPTION:" suivi d'une phrase concrète et actionnable en français.
+
+Indique aussi confidence : un score entre 0.0 et 1.0 reflétant à quel point cette valeur par
+défaut est un standard sûr du secteur (proche de 1.0 si elle est quasi certaine, proche de 0.0
+si elle est arbitraire et devra impérativement être confirmée)."""
+    draft = call_structured(prompt, AssumptionDraft, prompt_id="gap_filler.assumption")
     text = draft.assumption_text.strip()
     if not text.upper().startswith("ASSUMPTION:"):
         text = f"ASSUMPTION: {text}"
@@ -203,4 +342,12 @@ cette lacune, afin que le développement puisse démarrer. Le texte DOIT commenc
         linked_gap_id=gap.id,
         turn_added=turn,
         fresh=True,
+        created_by="llm",
+        timestamp=now_iso(),
+        confidence=clamp_confidence(draft.confidence),
+        # Une hypothèse est par définition non validée : quelle que soit la
+        # confiance annoncée, elle doit être relue avant d'être tenue pour acquise.
+        validation_status="needs_review",
+        model=current_model_name(),
+        prompt_version=prompt_version("gap_filler.assumption"),
     )

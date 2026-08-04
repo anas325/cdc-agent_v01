@@ -33,7 +33,9 @@ for this single-session prototype.
 ### `call_structured()` — provider-agnostic structured output
 
 ```python
-def call_structured(prompt: str, model: type[T], llm=None, max_retries: int = 2) -> T
+def call_structured(
+    prompt: str, model: type[T], llm=None, max_retries: int = 2, *, prompt_id: str | None = None
+) -> T
 ```
 
 This is the one function every agent uses to get typed data back from the
@@ -56,13 +58,32 @@ Every agent module defines small Pydantic "wire" models for what it expects
 back (e.g. `DedupVerdict`, `GapFinderOutput`, `RagGrade`, `CriticOutput`) and
 passes them straight to `call_structured`.
 
+### Prompt versioning — [`src/prompts.py`](../src/prompts.py)
+
+`PROMPT_VERSIONS` maps a prompt id (`"gap_filler.rag_grade"`,
+`"critic.contradiction"`, …) to a version string. Every `call_structured` call
+site passes its `prompt_id`; `prompts.version()` resolves it and raises
+`UnknownPromptError` on an unregistered id, so a typo fails loudly instead of
+producing unversioned audit records. The resolved version is:
+
+- stamped onto the `ContextItem` the call produces and onto its
+  `DecisionLogEntry` (see [State & Data Model](01-state-and-data-model.md)),
+- recorded on the telemetry `LLMCall`,
+- folded into the dev cache key (below).
+
+**Editing a prompt's wording means bumping its version in the same commit** —
+that is what invalidates the cache and what lets an audit tell which wording
+produced a given answer.
+
 ### Dev cache — [`src/llm_cache.py`](../src/llm_cache.py)
 
 Because this is the single chokepoint for LLM traffic, it is also where the
 optional dev cache lives. With `CDC_LLM_CACHE=1`, the parsed result is stored
 under `.cache/llm/` keyed by `sha256(assembled_prompt, provider, model,
-schema_name)` — the prompt is hashed *after* the JSON schema is appended, so a
-changed output model invalidates on its own. Hits are recorded in telemetry
+schema_name, prompt_version)` — the prompt is hashed *after* the JSON schema is
+appended, so a changed output model invalidates on its own, and the version
+component covers a prompt whose *surrounding logic* changed without changing
+the string for a given input. Hits are recorded in telemetry
 with `cache_hit=True` so replayed calls stay visible in the UI rather than
 silently vanishing from the timeline. Disabled unless the env var is set.
 
@@ -80,6 +101,9 @@ Chroma-backed, persisted locally, indexing `data/source_docs/`.
 `_chunk_text(text, chunk_size=1200, overlap=200)` — naive fixed-size
 character chunking with overlap; no sentence/paragraph awareness. Adequate
 for the short reference docs this prototype targets.
+
+Chunking happens **within a page, never across pages**, so every chunk maps to
+exactly one page number and a RAG answer can cite "stock_process.pdf, page 14".
 
 ### Embeddings
 
@@ -102,33 +126,49 @@ caveat as the LLM factory re: settings changes needing a restart.
 `ingest_source_docs(source_dir=None)` — walks every file under
 `data/source_docs/` (default source dir, from `settings.rag.source_dir`)
 whose extension is in `SUPPORTED_EXTENSIONS` (`.md`, `.txt`, `.pdf`), chunks
-each file, and adds chunks whose id (`"{filename}::{chunk_index}"`) isn't
-already in the collection. This makes ingestion idempotent/incremental:
-re-running it (as `ingest_node` does at the start of every graph run) only
-adds genuinely new files/chunks, it doesn't re-embed everything. There's no
-mechanism to detect *changed* content in an existing file under the same
-name+chunk-index — editing a source doc without renaming it won't re-index
-the edited chunk.
+each file per page, and adds chunks whose id isn't already in the collection.
+Chunk ids are `"{filename}::p{page}::{chunk_index}"` for paginated formats and
+`"{filename}::{chunk_index}"` for flat ones. This makes ingestion
+idempotent/incremental: re-running it (as `ingest_node` does at the start of
+every graph run) only adds genuinely new files/chunks, it doesn't re-embed
+everything.
 
-Text extraction is dispatched by `_extract_text_from_path()`: `.md`/`.txt`
-are read directly as UTF-8; `.pdf` is parsed page-by-page with `pypdf`
-(`PdfReader`, imported lazily so `pypdf` is only required when a PDF is
-actually ingested) and the pages joined with blank lines. A file that fails
-extraction (`RuntimeError`/`ValueError`, e.g. `pypdf` missing or an
-unsupported suffix) or that yields no extractable text is silently skipped
-rather than aborting the whole ingestion run. Each chunk's metadata also now
-carries `file_type` (the lowercased suffix) alongside `source`. The same
-`_extract_text_from_path()` helper is reused directly by the Streamlit
-sidebar to read an uploaded PDF CDC (see [Streamlit UI](05-streamlit-ui.md)).
+`_purge_stale_chunks()` deletes any chunk of a file being ingested whose id the
+current scheme no longer produces. That covers two cases: a `.chroma` built
+before page-aware ids (which would otherwise hold the same text twice, under
+both schemes), and an edited document that now yields fewer chunks. It does
+**not** detect changed content at a stable id — editing a source doc without
+changing its chunk count won't re-index the edited chunk.
+
+Text extraction is dispatched by `_extract_pages()`, which returns
+`(page_number, text)` pairs: `.md`/`.txt` are read directly as UTF-8 and yield a
+single `(None, text)` pair; `.pdf` is parsed with `pypdf` (`PdfReader`, imported
+lazily so `pypdf` is only required when a PDF is actually ingested) and yields
+one pair per 1-based page. A file that fails extraction
+(`RuntimeError`/`ValueError`, e.g. `pypdf` missing or an unsupported suffix) or
+that yields no extractable text is silently skipped rather than aborting the
+whole ingestion run. Each chunk's metadata carries `source`, `file_type` (the
+lowercased suffix) and, for paginated formats, `page`.
+
+`extract_document_text(path)` is the public whole-document variant (pages joined
+with blank lines), used by the Streamlit sidebar to read an uploaded PDF CDC
+where page boundaries carry no meaning (see [Streamlit UI](05-streamlit-ui.md)).
 
 ### Retrieval
 
 `retrieve(query, top_k=None)` — semantic query against the collection
 (`top_k` from `settings.rag.top_k`, default 4), returns
-`[{content, source, distance}, ...]` sorted by relevance. Returns `[]`
-immediately if the collection is empty (no source docs ingested yet), rather
-than erroring. Called by `gap_filler._grade_rag_hits` flow, keyed on
+`[{content, chunk_id, document, source, page, distance, score}, ...]` sorted by
+relevance. `score` is a 0–1 relevance score derived from Chroma's *unbounded*
+L2 distance via `1/(1+d)`, so it can be displayed and thresholded directly;
+`source` is kept as an alias of `document` for backwards compatibility. Returns
+`[]` immediately if the collection is empty (no source docs ingested yet),
+rather than erroring. Called by the `gap_filler._grade_rag_hits` flow, keyed on
 `gap.description` as the query text.
+
+Each hit becomes an `Evidence` record (`decisions.evidence_from_hit`) attached
+to the resulting `ContextItem`, which is what lets the QA report and the UI cite
+the exact document, page and chunk behind a RAG-sourced requirement.
 
 ## Provider swap reference
 

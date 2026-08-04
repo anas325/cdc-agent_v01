@@ -23,6 +23,7 @@ class CDCState(TypedDict, total=False):
     done: bool
     loop_settings: LoopSettings
     turn_log: Annotated[list[TurnLogEntry], operator.add]   # append-only, for the UI
+    decision_log: Annotated[list[DecisionLogEntry], operator.add]  # append-only audit trail
     initial_cdc_text: str
     stop_reason: str | None
     current_mode: Literal["fresh", "section"]
@@ -32,9 +33,11 @@ class CDCState(TypedDict, total=False):
     _mapped_items: dict[str, list[str]]  # transient, synthesizer -> final_validator only
 ```
 
-`turn_log` uses LangGraph's reducer pattern (`Annotated[..., operator.add]`):
-every node that logs appends to the list rather than replacing it, so the
-Streamlit UI can render a full history across turns.
+`turn_log` and `decision_log` use LangGraph's reducer pattern
+(`Annotated[..., operator.add]`): every node that logs appends to the list
+rather than replacing it, so the Streamlit UI can render a full history across
+turns. Because they live in the state, they are checkpointed — the audit trail
+survives a restart and a resumed run.
 
 Fields prefixed `_` are not really part of the durable domain state — they're
 scratch space for passing a value from one specific node to the very next one
@@ -54,6 +57,17 @@ class ContextItem(BaseModel):
     linked_gap_id: str | None     # which gap this answers, if any
     turn_added: int
     fresh: bool = False           # True the turn it's added -> forces re-evaluation
+    # --- provenance ---
+    created_by: Literal["user", "rag", "llm", "system"] = "system"
+    timestamp: str | None = None                  # ISO-8601 UTC
+    evidence: list[Evidence] = []                 # source chunks, for RAG answers
+    evidence_grade: Literal["sufficient", "partial", "insufficient"] | None = None
+    confidence: float | None = None               # operational score 0–1
+    validation_status: Literal[
+        "unreviewed", "accepted", "rejected", "needs_review"
+    ] = "unreviewed"
+    model: str | None = None                      # LLM that produced it, if any
+    prompt_version: str | None = None
 ```
 
 This is the unit of truth in the system. It doesn't matter whether a fact
@@ -63,6 +77,68 @@ assumption — it's a `ContextItem` either way, distinguished only by `source`.
 checks for fresh items before anything else each turn (see
 [Graph & Agents](02-graph-and-agents.md#orchestrator)), and the gap-finder /
 critic use it to know which items are new this turn.
+
+Every provenance field is defaulted, so checkpoints written before they existed
+still deserialize. Who fills what:
+
+| `source` | `created_by` | `confidence` | `validation_status` |
+|---|---|---|---|
+| `initial_cdc` | `system` | `1.0` | `accepted` (the author's own text) |
+| `user_answer` | `user` | `1.0` | `accepted` (a human is authoritative) |
+| `rag` | `rag` | LLM-graded | `accepted` if ≥ 0.80, else `needs_review` |
+| `assumption` | `llm` | LLM-graded | **always** `needs_review` |
+
+`confidence` is an *operational* score, not a probability: its only job is to
+drive that acceptance policy (`decisions.validation_for`) and the UI's
+high/medium/low band (≥ 0.80 / ≥ 0.50 / below). An LLM that answers `95` instead
+of `0.95` is normalized by `decisions.clamp_confidence`.
+
+### `Evidence` — a source chunk backing a `ContextItem`
+
+```python
+class Evidence(BaseModel):
+    chunk_id: str            # Chroma id, e.g. "stock_process.pdf::p14::3"
+    document: str            # file name
+    page: int | None = None  # 1-based PDF page; None for md/txt
+    retrieval_score: float   # 0–1, derived from Chroma's distance
+    excerpt: str             # chunk text, truncated to EXCERPT_MAX_CHARS
+```
+
+Built from a `src.rag.retrieve` hit by `decisions.evidence_from_hit`. This is
+what makes a RAG-sourced requirement checkable: the QA report and the gap cards
+in the UI cite the exact document, page and chunk the answer rests on.
+
+### `DecisionLogEntry` — why the system did what it did
+
+```python
+class DecisionLogEntry(BaseModel):
+    id: str
+    timestamp: str                # ISO-8601 UTC
+    thread_id: str | None         # = run id
+    turn: int
+    agent: str                    # gap_finder, gap_filler, critic, ...
+    decision_type: Literal[
+        "gap_detected", "rag_answer", "rag_rejected", "question_drafted",
+        "question_deduped", "assumption_built", "answer_integrated",
+        "contradiction_found", "section_status_changed", "section_synthesized",
+        "loop_limit_applied", "final_check",
+    ]
+    summary: str
+    input_ids: list[str]          # gaps / context items fed in
+    output_ids: list[str]         # ids produced
+    evidence_ids: list[str]       # Evidence.chunk_id values
+    confidence: float | None
+    model: str | None
+    prompt_version: str | None
+    details: dict
+```
+
+Where `turn_log` is a narrative for humans, this is the machine-readable trail:
+enough to reconstruct which inputs produced which outputs, under which model and
+prompt version. Agents *build* these (via `decisions.make_decision`) and return
+them in their result models; only `graph.py` node wrappers write them into
+state, the same rule that applies to gaps. `final_validator.write_decision_log`
+dumps the run to `output/decision_log.jsonl`, one JSON object per line.
 
 ### `Gap` — a detected ambiguity, missing piece, or contradiction
 
@@ -81,7 +157,7 @@ class Gap(BaseModel):
         "open", "rag_answered", "user_answered",
         "assumed", "deferred", "resolved",
     ] = "open"
-    question_text: str | None = None
+    question_text: str | None = None   # the question actually asked, once asked
     answer_item_ids: list[str] = []
     questions_asked: int = 0
 ```
@@ -167,6 +243,19 @@ state. `context_utils.py` centralizes that so formatting stays consistent:
   gate.
 - `get_section(state, section_id)` — lookup helper, raises `KeyError` if the
   id isn't in `sections_config`.
+
+## `src/decisions.py` — building audit records
+
+Small, dependency-light helpers shared by every agent:
+
+- `make_decision(state, *, agent, decision_type, summary, **kw)` — mints a
+  `DecisionLogEntry`, stamping the turn from state, the thread id from
+  telemetry, an ISO timestamp, and the prompt version for a given `prompt_id`.
+- `evidence_from_hit(hit)` / `format_evidence(ev)` — retrieve hit → `Evidence`,
+  and `Evidence` → a `"doc.pdf, p. 14"` citation.
+- `confidence_band(c)` / `validation_for(c)` / `clamp_confidence(c)` — the
+  confidence policy, defined once so the UI badges and the acceptance rule can
+  never drift apart.
 
 ## `src/ids.py`
 

@@ -33,6 +33,7 @@ from langgraph.types import Command
 
 from src import db, telemetry
 from src.config import load_sections, load_settings
+from src.decisions import confidence_band, format_evidence
 from src.graph import build_graph
 from src.state import LoopSettings, SectionStatus
 from src.telemetry import format_duration
@@ -76,6 +77,34 @@ STATUS_BADGE = {
     "user_answered": "green",
     "resolved": "green",
 }
+
+# Provenance / audit trail (phase 1). Confidence bands come from
+# src.decisions so the UI and the acceptance policy can never drift apart.
+SOURCE_LABELS = {
+    "initial_cdc": "CDC initial",
+    "user_answer": "réponse utilisateur",
+    "rag": "documentation",
+    "assumption": "hypothèse",
+}
+SOURCE_BADGE = {
+    "initial_cdc": "gray",
+    "user_answer": "green",
+    "rag": "blue",
+    "assumption": "violet",
+}
+VALIDATION_LABELS = {
+    "accepted": "acceptée",
+    "needs_review": "à relire",
+    "rejected": "rejetée",
+    "unreviewed": "non revue",
+}
+VALIDATION_BADGE = {
+    "accepted": "green",
+    "needs_review": "orange",
+    "rejected": "red",
+    "unreviewed": "gray",
+}
+CONFIDENCE_BADGE = {"high": "green", "medium": "orange", "low": "red", "unknown": "gray"}
 
 CATEGORY_WEIGHTS = {
     "contradiction": 2.0,
@@ -319,12 +348,12 @@ def render_sidebar(settings) -> tuple[str, LoopSettings, bool, dict[str, bool]]:
     if cdc_file is not None:
         st.session_state["_cdc_title"] = cdc_file.name
         if cdc_file.name.lower().endswith(".pdf"):
-            from src.rag import _extract_text_from_path
+            from src.rag import extract_document_text
 
             SOURCE_DOCS_DIR.mkdir(parents=True, exist_ok=True)
             tmp_path = SOURCE_DOCS_DIR / cdc_file.name
             tmp_path.write_bytes(cdc_file.getvalue())
-            cdc_text = _extract_text_from_path(tmp_path)
+            cdc_text = extract_document_text(tmp_path)
         else:
             cdc_text = cdc_file.read().decode("utf-8", errors="ignore")
 
@@ -471,6 +500,40 @@ def _gap_sort_key(gap):
     )
 
 
+def render_provenance(item) -> None:
+    """Show where one answer came from, how sure the system is, and its evidence.
+
+    This is the visible half of the audit trail: origin badge, confidence band,
+    review status, and — for RAG answers — the exact document and page cited.
+    """
+    badges = [f":{SOURCE_BADGE.get(item.source, 'gray')}-badge[{SOURCE_LABELS.get(item.source, item.source)}]"]
+    if item.confidence is not None:
+        band = confidence_band(item.confidence)
+        badges.append(f":{CONFIDENCE_BADGE[band]}-badge[confiance {item.confidence:.0%}]")
+    badges.append(
+        f":{VALIDATION_BADGE.get(item.validation_status, 'gray')}-badge"
+        f"[{VALIDATION_LABELS.get(item.validation_status, item.validation_status)}]"
+    )
+    st.markdown(f":material/reply: {' '.join(badges)}")
+    st.markdown(item.content)
+
+    if item.evidence:
+        with st.popover(f":material/description: Preuves ({len(item.evidence)})"):
+            for ev in item.evidence:
+                st.markdown(f"**{format_evidence(ev)}** — score {ev.retrieval_score:.2f}")
+                st.caption(f"`{ev.chunk_id}`")
+                st.markdown(f"> {ev.excerpt}" if ev.excerpt else "_(extrait indisponible)_")
+
+    trace = [f"origine : {item.created_by}"]
+    if item.model:
+        trace.append(f"modèle : {item.model}")
+    if item.prompt_version:
+        trace.append(f"prompt : {item.prompt_version}")
+    if item.timestamp:
+        trace.append(item.timestamp[:19].replace("T", " "))
+    st.caption(" · ".join(trace))
+
+
 def render_gap_card(gap, questions_by_gap: dict, answers_by_gap: dict, max_per_gap: int) -> None:
     with st.container(border=True):
         sev_badge = f":{SEVERITY_BADGE[gap.severity]}-badge[{SEVERITY_LABELS[gap.severity]}]"
@@ -487,7 +550,7 @@ def render_gap_card(gap, questions_by_gap: dict, answers_by_gap: dict, max_per_g
                 for q in asked:
                     st.markdown(f":material/help: **Tour {q.turn} —** {q.text}")
                 for item in answers:
-                    st.markdown(f":material/reply: :gray[{item.source}] {item.content}")
+                    render_provenance(item)
 
         st.caption(
             f"Questions posées : {gap.questions_asked}/{max_per_gap} · "
@@ -606,18 +669,26 @@ def render_completion(values: dict, settings) -> None:
     qmd_path = output_dir / f"{settings.quarto.output_basename}.qmd"
     docx_path = output_dir / f"{settings.quarto.output_basename}.{settings.quarto.target_format}"
     report_path = output_dir / "qa_report.md"
+    decision_log_path = output_dir / "decision_log.jsonl"
 
     if report_path.exists():
         st.subheader("Rapport QA")
         st.markdown(report_path.read_text(encoding="utf-8"))
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     if qmd_path.exists():
         col1.download_button("Télécharger cdc_final.qmd", qmd_path.read_bytes(), file_name=qmd_path.name)
     if docx_path.exists():
         col2.download_button("Télécharger cdc_final.docx", docx_path.read_bytes(), file_name=docx_path.name)
     else:
         col2.info("Pas de .docx : Quarto n'est pas installé ou le rendu a échoué. Le .qmd reste disponible.")
+    if decision_log_path.exists():
+        col3.download_button(
+            "Télécharger le journal de décisions",
+            decision_log_path.read_bytes(),
+            file_name=decision_log_path.name,
+            help="Trace d'audit : une ligne JSON par décision prise par le système.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -720,6 +791,7 @@ def render_llm_calls(calls: list, summary: dict) -> None:
             {
                 "Nœud": c.node,
                 "Schéma": c.schema,
+                "Prompt": f"{c.prompt_id} ({c.prompt_version})" if c.prompt_id else "—",
                 "Durée (s)": round(c.duration_s, 2),
                 "Cache": "✓" if c.cache_hit else "",
                 "Tentatives": c.attempts,
@@ -796,6 +868,52 @@ def render_turn_log(values: dict) -> None:
                 st.json(entry.details)
 
 
+def render_decision_log(values: dict) -> None:
+    """The machine-readable audit trail: one row per AI decision.
+
+    Answers "why did the system do that?" — which agent decided, on what
+    inputs, with what confidence, and under which model/prompt version.
+    """
+    entries = values.get("decision_log", [])
+    st.subheader("Journal des décisions")
+    if not entries:
+        st.caption("Aucune décision enregistrée.")
+        return
+
+    types = sorted({e.decision_type for e in entries})
+    chosen = st.multiselect("Filtrer par type de décision", types, default=[], key="decision_types")
+    shown = [e for e in entries if not chosen or e.decision_type in chosen]
+
+    st.dataframe(
+        [
+            {
+                "Horodatage": e.timestamp[11:19],
+                "Tour": e.turn,
+                "Agent": e.agent,
+                "Décision": e.decision_type,
+                "Résumé": e.summary,
+                "Confiance": "—" if e.confidence is None else f"{e.confidence:.2f}",
+                "Entrées": ", ".join(e.input_ids),
+                "Sorties": ", ".join(e.output_ids),
+                "Preuves": ", ".join(e.evidence_ids),
+                "Modèle": e.model or "—",
+                "Prompt": e.prompt_version or "—",
+            }
+            for e in reversed(shown)
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+    st.caption(f"{len(shown)} décision(s) affichée(s) sur {len(entries)}.")
+    st.download_button(
+        "Télécharger le journal (JSONL)",
+        data="\n".join(e.model_dump_json() for e in entries),
+        file_name="decision_log.jsonl",
+        mime="application/jsonl",
+        key="download_decision_log",
+    )
+
+
 def render_raw_state(values: dict) -> None:
     st.subheader("État brut du checkpointer")
     scalars = {
@@ -828,6 +946,8 @@ def render_debug_tab(values: dict) -> None:
     render_raw_gaps(values)
     st.divider()
     render_turn_log(values)
+    st.divider()
+    render_decision_log(values)
     st.divider()
     render_raw_state(values)
 

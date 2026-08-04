@@ -14,6 +14,16 @@ from typing_extensions import TypedDict
 
 ContextSource = Literal["initial_cdc", "user_answer", "rag", "assumption"]
 
+# Qui a produit l'information : l'utilisateur, la recherche documentaire, un
+# raisonnement du LLM, ou la mécanique du système (découpage du CDC initial).
+CreatedBy = Literal["user", "rag", "llm", "system"]
+
+# État de revue d'un élément de contexte. Voir les seuils dans src/decisions.py.
+ValidationStatus = Literal["unreviewed", "accepted", "rejected", "needs_review"]
+
+# Qualité des preuves documentaires derrière une réponse RAG.
+EvidenceGrade = Literal["sufficient", "partial", "insufficient"]
+
 GapCategory = Literal[
     "functional_ambiguity",
     "nfr",
@@ -39,6 +49,34 @@ GapStatus = Literal[
 
 SectionStatusValue = Literal["empty", "in_progress", "complete", "reopened", "skipped"]
 
+# Décisions d'agent journalisées (voir src/decisions.py et docs/01).
+DecisionType = Literal[
+    "gap_detected",
+    "rag_answer",
+    "rag_rejected",
+    "question_drafted",
+    "question_deduped",
+    "assumption_built",
+    "answer_integrated",
+    "contradiction_found",
+    "section_status_changed",
+    "section_synthesized",
+    "loop_limit_applied",
+    "final_check",
+]
+
+EXCERPT_MAX_CHARS = 400
+
+
+class Evidence(BaseModel):
+    """Un extrait de document de référence qui étaye un ContextItem."""
+
+    chunk_id: str  # id Chroma, ex. "stock_process.pdf::p14::3"
+    document: str  # nom du fichier source
+    page: int | None = None  # page PDF (1-based) ; None pour md/txt
+    retrieval_score: float = 0.0  # 0–1, dérivé de la distance (voir src/rag.py)
+    excerpt: str = ""  # texte du chunk, tronqué à EXCERPT_MAX_CHARS
+
 
 class ContextItem(BaseModel):
     id: str
@@ -48,6 +86,17 @@ class ContextItem(BaseModel):
     linked_gap_id: str | None = None
     turn_added: int
     fresh: bool = False
+    # --- Provenance (phase 1 « auditabilité ») ---------------------------
+    # Tous ces champs ont une valeur par défaut : les checkpoints Postgres
+    # écrits avant leur ajout doivent continuer à se désérialiser.
+    created_by: CreatedBy = "system"
+    timestamp: str | None = None  # ISO-8601 UTC
+    evidence: list[Evidence] = Field(default_factory=list)
+    evidence_grade: EvidenceGrade | None = None
+    confidence: float | None = None  # score opérationnel 0–1, pas une probabilité
+    validation_status: ValidationStatus = "unreviewed"
+    model: str | None = None  # modèle LLM ayant produit le contenu, le cas échéant
+    prompt_version: str | None = None
 
 
 class Gap(BaseModel):
@@ -90,6 +139,31 @@ class TurnLogEntry(BaseModel):
     details: dict = Field(default_factory=dict)
 
 
+class DecisionLogEntry(BaseModel):
+    """Trace machine-lisible d'UNE décision d'agent.
+
+    Complète turn_log (récit lisible pour l'UI) : ici on enregistre les
+    identifiants en entrée/sortie, les preuves, la confiance et le couple
+    modèle/version de prompt, pour pouvoir répondre après coup à « pourquoi le
+    système a-t-il pris cette décision ? ».
+    """
+
+    id: str
+    timestamp: str  # ISO-8601 UTC
+    thread_id: str | None = None  # = run_id
+    turn: int
+    agent: str  # agent ayant décidé (gap_finder, critic, orchestrator, ...)
+    decision_type: DecisionType
+    summary: str
+    input_ids: list[str] = Field(default_factory=list)  # gaps / items en entrée
+    output_ids: list[str] = Field(default_factory=list)  # ids produits
+    evidence_ids: list[str] = Field(default_factory=list)  # Evidence.chunk_id
+    confidence: float | None = None
+    model: str | None = None
+    prompt_version: str | None = None
+    details: dict = Field(default_factory=dict)
+
+
 class SectionConfig(BaseModel):
     id: str
     title: str
@@ -118,6 +192,7 @@ class CDCState(TypedDict, total=False):
     done: bool
     loop_settings: LoopSettings
     turn_log: Annotated[list[TurnLogEntry], operator.add]
+    decision_log: Annotated[list[DecisionLogEntry], operator.add]
     initial_cdc_text: str
     stop_reason: str | None
     current_mode: Literal["fresh", "section"]
