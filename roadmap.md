@@ -1339,16 +1339,27 @@ confidence on gap cards, plus a decision-log table under "Sous le capot".
 Implement:
 
 ```text
-[ ] 10–20 benchmark CDCs
-[ ] Ground truth gaps
-[ ] Ground truth contradictions
-[ ] Ground truth source documents
-[ ] Expert-validated expected final output
+[x] 10–20 benchmark CDCs
+[x] Ground truth gaps
+[x] Ground truth contradictions
+[x] Ground truth source documents
+[x] Expert-validated expected answers
 ```
 
 Result:
 
 > You have something measurable.
+
+**Done.** Ten annotated cases in `evals/datasets/benchmark/` (125 ground-truth
+gaps, 20 contradictions, 38 of them RAG-resolvable with a cited document), each
+with `initial_cdc.md`, a private `source_docs/`, `ground_truth.json` and
+`stakeholder.yaml`. Schema and validating loader in `evals/dataset.py` — an
+invalid category, a dangling `gap_ref` or a citation that has drifted out of its
+source document fails at load, not mid-run. `cdc_009_reservation_salles` is a
+deliberate **negative control**: a well-written CDC with three gaps, so
+over-reporting is visible. Expected *final* documents were left out on purpose:
+they would be one annotator's prose, not ground truth, and Phase 4 measures the
+components instead.
 
 ---
 
@@ -1357,17 +1368,29 @@ Result:
 Implement:
 
 ```text
-[ ] Stakeholder profiles
-[ ] Knowledge base per stakeholder
-[ ] Synthetic answer simulator
-[ ] "I don't know" behavior
-[ ] Contradictory-answer scenarios
-[ ] Batch graph execution
+[x] Stakeholder profiles
+[x] Knowledge base per stakeholder
+[x] Synthetic answer simulator
+[x] "I don't know" behavior
+[x] Contradictory-answer scenarios
+[x] Batch graph execution
 ```
 
 Result:
 
 > You can run hundreds of experiments without manually answering questions.
+
+**Done.** `evals/simulator.py` provides both modes of §15: a deterministic
+`OracleSimulator` (no LLM, replays the annotated answer, says "je ne sais pas"
+when nothing is annotated) and a profile-driven `StakeholderSimulator` whose
+prompt enforces §14's "answer only from the listed knowledge" rule. `--mode
+realistic` adds vagueness, hedging and injected contradictions, reproducibly for
+a given `--seed`. `evals/run_benchmark.py` drives the real compiled graph through
+the full interrupt/resume cycle and writes `manifest.json` (the §17
+reproducibility record), `predictions.json`, `transcript.jsonl`, `telemetry.json`,
+`summary.csv` and `report.md` per run. Per-case isolation of the RAG corpus,
+Chroma index and output directory comes from `evals/harness.py::isolate` on top of
+`src/config.py::set_settings_override`. See `docs/07-evaluation.md`.
 
 ---
 

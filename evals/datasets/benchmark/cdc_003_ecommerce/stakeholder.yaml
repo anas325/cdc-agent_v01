@@ -1,0 +1,37 @@
+# Synthetic stakeholder for cdc_003_ecommerce.
+#
+# A business owner who knows the commerce rules but not the IT platform: the
+# platform answers live in politique_securite.md and must come from RAG, not
+# from this profile. `unknown` makes that refusal explicit.
+
+name: "Responsable e-commerce"
+role: "Business Owner"
+
+knowledge:
+  - "L'objectif est +15 % de chiffre d'affaires en ligne sur douze mois et un taux de conversion passant de 1,2 % à 2 %."
+  - "Un seul code de réduction par commande, non cumulable avec une promotion catalogue, plafonné à 30 % du panier."
+  - "Les codes de réduction ont toujours une date de début et une date de fin."
+  - "La recommandation s'affiche sur la fiche produit et dans le panier, basée sur les produits achetés ensemble sur 90 jours, limitée à quatre produits en stock."
+  - "Si le paiement est refusé, la commande reste en brouillon et le panier est conservé 30 jours."
+  - "En cas de rupture pendant la commande, le produit est retiré du panier avec un message avant paiement, jamais après."
+  - "Un compte client porte email, mot de passe, nom, adresse de livraison et adresse de facturation."
+  - "Une commande suit le cycle brouillon → payée → préparée → expédiée → livrée, annulable tant qu'elle n'est pas expédiée."
+  - "La v1 est un site responsive : pas d'application mobile native."
+  - "Le budget est de 220 000 € et la mise en ligne doit précéder le Black Friday."
+  - "La phase 2 couvre la recommandation avancée et le programme de fidélité."
+  - "La cible de performance est 1,5 seconde pour une page catalogue et 3 secondes pour la validation de commande."
+
+unknown:
+  - "Le prestataire de paiement retenu"
+  - "L'hébergement et le pic de trafic de référence"
+  - "Les exigences de disponibilité et le plan de reprise"
+  - "Le mode d'authentification imposé par la DSI"
+
+behavior:
+  style: precise
+  unknown_rate: 0.0
+  allow_contradictions: false
+
+contradictions:
+  - "En réalité une application mobile native fait partie de la v1, le responsive ne suffira pas."
+  - "Les codes de réduction sont cumulables entre eux, sans plafond."

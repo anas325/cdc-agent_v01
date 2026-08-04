@@ -17,3 +17,7 @@ prompt.md
 .streamlit
 .claude
 output/*
+
+# Benchmark run outputs are reproducible artifacts (see docs/07-evaluation.md).
+# The datasets under evals/datasets/ ARE committed — they are the ground truth.
+evals/results/*

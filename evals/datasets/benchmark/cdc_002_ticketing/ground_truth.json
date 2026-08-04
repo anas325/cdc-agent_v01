@@ -1,0 +1,206 @@
+{
+  "case_id": "cdc_002_ticketing",
+  "title": "Outil interne de suivi des demandes IT (ticketing léger)",
+  "dataset_version": "v1",
+  "annotator": "équipe CDC (relecture experte)",
+  "notes": "Le cas RAG de référence : le CDC laisse volontairement ouverts des points que les trois annexes tranchent noir sur blanc. La plupart des lacunes portent resolvable_by='rag' avec le document attendu — un système qui pose quand même la question au lieu de la résoudre par récupération se voit dans le ratio RAG/humain. Quelques lacunes restent resolvable_by='human' : aucune annexe ne les couvre, elles servent de témoin.",
+  "gaps": [
+    {
+      "id": "GT-GAP-001",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "blocking",
+      "description": "Comportement attendu quand la création de ticket est invalide (titre trop court, description vide, pièce jointe trop lourde ou de type interdit) non spécifié.",
+      "keywords": ["titre", "piece jointe", "rejet"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "annexe1_regles_gestion_cas_limites.md",
+        "quote": "Titre vide ou < 5 caractères | Rejet"
+      }
+    },
+    {
+      "id": "GT-GAP-002",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "RG02 déclenche une alerte « après 4h » sans dire si le délai est calendaire ou ouvré, ni comment sont traités les tickets haute priorité.",
+      "keywords": ["4h", "alerte", "priorite"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "annexe1_regles_gestion_cas_limites.md",
+        "quote": "alerte admin après 4h ouvrées (pas 4h calendaires)"
+      }
+    },
+    {
+      "id": "GT-GAP-003",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "La règle d'attribution automatique ne dit pas quel agent est choisi lorsque plusieurs sont disponibles.",
+      "keywords": ["attribution", "agent"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "annexe1_regles_gestion_cas_limites.md",
+        "quote": "Attribution au round-robin (agent avec le moins de tickets ouverts)"
+      }
+    },
+    {
+      "id": "GT-GAP-004",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "blocking",
+      "description": "Le cycle de vie ne précise pas les transitions interdites ni ce qui arrive à un ticket « En attente demandeur » resté sans réponse.",
+      "keywords": ["transition", "statut", "en attente"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "annexe1_regles_gestion_cas_limites.md",
+        "quote": "Ticket \"En attente demandeur\" sans réponse après 7 jours"
+      }
+    },
+    {
+      "id": "GT-GAP-005",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "important",
+      "description": "Réouverture d'un ticket clôturé : le CDC ne dit pas si elle est possible ni ce que devient l'assignation.",
+      "keywords": ["reouvrir", "cloture"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "annexe1_regles_gestion_cas_limites.md",
+        "quote": "Refusé. Message : \"Ce ticket est clôturé"
+      }
+    },
+    {
+      "id": "GT-GAP-006",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "important",
+      "description": "Rien n'empêche explicitement une rafale de notifications lors de changements de statut rapprochés.",
+      "keywords": ["notification", "email"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "annexe1_regles_gestion_cas_limites.md",
+        "quote": "Notifications groupées, un seul email envoyé après 1 min"
+      }
+    },
+    {
+      "id": "GT-GAP-007",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "La matrice de permissions par rôle (voir, modifier, réassigner, supprimer) n'est pas décrite : le tableau des acteurs reste déclaratif.",
+      "keywords": ["permission", "role"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "annexe1_regles_gestion_cas_limites.md",
+        "quote": "un demandeur ne peut jamais voir les tickets d'un autre demandeur"
+      }
+    },
+    {
+      "id": "GT-GAP-008",
+      "section_id": "functional",
+      "category": "functional_ambiguity",
+      "severity": "important",
+      "description": "Le tableau de bord annonce un « temps moyen de résolution » sans définir sa méthode de calcul.",
+      "keywords": ["temps moyen", "resolution"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "annexe1_regles_gestion_cas_limites.md",
+        "quote": "en excluant le temps passé en \"En attente demandeur\""
+      }
+    },
+    {
+      "id": "GT-GAP-009",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "blocking",
+      "description": "L'extrait d'API ne donne ni schéma de requête/réponse, ni codes d'erreur, ni pagination.",
+      "keywords": ["api", "erreur", "pagination"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "annexe2_contrat_api.md",
+        "quote": "(défaut `limit=20`, max `limit=100`)"
+      }
+    },
+    {
+      "id": "GT-GAP-010",
+      "section_id": "technical",
+      "category": "data_model",
+      "severity": "important",
+      "description": "Le modèle de données ne prévoit ni suppression logique ni historique des changements, alors que la traçabilité d'audit est un objectif.",
+      "keywords": ["suppression", "historique", "audit"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "annexe1_regles_gestion_cas_limites.md",
+        "quote": "la suppression est toujours un \"soft delete\" (champ `deleted_at`)"
+      }
+    },
+    {
+      "id": "GT-GAP-011",
+      "section_id": "functional",
+      "category": "acceptance_criteria",
+      "severity": "important",
+      "description": "Seuls trois critères d'acceptation d'exemple sont donnés ; F01 à F05 ne sont pas couvertes de bout en bout.",
+      "keywords": ["critere", "acceptation", "recette"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "annexe3_scenarios_test.md",
+        "quote": "Scénarios de test — Création de ticket (F01)"
+      }
+    },
+    {
+      "id": "GT-GAP-012",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "important",
+      "description": "Aucune exigence de sauvegarde ni de reprise après incident, alors que l'outil devient le référentiel unique des demandes IT.",
+      "keywords": ["sauvegarde", "reprise"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-013",
+      "section_id": "constraints",
+      "category": "scope",
+      "severity": "important",
+      "description": "« Doit être livré avant la fin du trimestre » sans date ferme, alors que le planning indicatif totalise environ 3 semaines.",
+      "keywords": ["trimestre", "date"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-014",
+      "section_id": "problem",
+      "category": "functional_ambiguity",
+      "severity": "nice_to_have",
+      "description": "L'objectif « réduire le délai moyen de 3 jours à 1 jour » n'indique pas comment il sera mesuré ni à partir de quelle date de référence.",
+      "keywords": ["delai moyen", "mesure"],
+      "resolvable_by": "human"
+    }
+  ],
+  "contradictions": [
+    {
+      "id": "GT-CON-001",
+      "statement_a": "Exclus (hors périmètre v1) : Intégration avec Active Directory",
+      "statement_b": "Auth : JWT (session 8h) — sans source d'identité définie pour un outil interne",
+      "section_ids": ["problem", "technical"],
+      "severity": "important",
+      "keywords": ["active directory", "auth"]
+    }
+  ],
+  "expected_answers": [
+    {
+      "gap_ref": "GT-GAP-012",
+      "answer": "Sauvegarde quotidienne de la base PostgreSQL, conservée 30 jours, avec une restauration testée une fois par trimestre. Une indisponibilité d'une demi-journée est tolérable.",
+      "keywords": ["sauvegarde", "quotidienne"]
+    },
+    {
+      "gap_ref": "GT-GAP-013",
+      "answer": "La date ferme est le 30 septembre : la recette doit être terminée avant la clôture du trimestre, les lots peuvent être réordonnés mais pas décalés.",
+      "keywords": ["date", "trimestre"]
+    },
+    {
+      "gap_ref": "GT-GAP-014",
+      "answer": "Le délai moyen se mesure entre la création du ticket et son passage en « Résolu », sur une moyenne glissante de 30 jours ouvrés ; la référence de 3 jours vient de l'historique du fichier Excel actuel.",
+      "keywords": ["delai moyen", "resolu"]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+# Annotated CDC benchmark — roadmap Phase 2.
+#
+# Bump dataset_version whenever a case is added or its ground truth changes:
+# it is recorded in every run manifest, and comparing two runs against
+# different dataset versions is meaningless.
+#
+# Each case directory holds initial_cdc.md, source_docs/, ground_truth.json and
+# stakeholder.yaml. See docs/07-evaluation.md for the schemas.
+
+dataset_version: v1
+
+cases:
+  - id: cdc_001_smartstock
+    focus: "contradictions denses + NFR vagues, aucun document de référence"
+  - id: cdc_002_ticketing
+    focus: "cas RAG : la plupart des lacunes sont résolubles depuis les annexes"
+  - id: cdc_003_ecommerce
+    focus: "CDC très court et très vague, forte densité de lacunes"
+  - id: cdc_004_rh_onboarding
+    focus: "modèle de données incomplet, rôles et rétention non définis"
+  - id: cdc_005_iot_maintenance
+    focus: "intégrations et NFR, contrat d'API disponible en annexe"
+  - id: cdc_006_portail_client
+    focus: "sécurité et contrôle d'accès, politique de sécurité en annexe"
+  - id: cdc_007_logistique_livraison
+    focus: "contradictions inter-sections (délais, volumétrie, disponibilité)"
+  - id: cdc_008_facturation
+    focus: "règles de gestion et cas limites, règles disponibles en annexe"
+  - id: cdc_009_reservation_salles
+    focus: "témoin négatif : CDC petit et correctement spécifié"
+  - id: cdc_010_migration_erp
+    focus: "périmètre / hors périmètre ambigu, planning contradictoire"

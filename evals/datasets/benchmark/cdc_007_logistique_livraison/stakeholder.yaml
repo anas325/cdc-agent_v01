@@ -1,0 +1,39 @@
+# Synthetic stakeholder for cdc_007_logistique_livraison.
+#
+# The contradiction-heavy case, so the profile carries a matching set of
+# contradictory statements: in --mode realistic this stakeholder actively feeds
+# the critic new inconsistencies on top of the ones already in the CDC.
+
+name: "Responsable exploitation dernier kilomètre"
+role: "Business Owner"
+
+knowledge:
+  - "Hors connexion, le chauffeur consulte sa tournée et déclare ses livraisons ; les déclarations sont mises en file locale."
+  - "La synchronisation se fait dès le retour du réseau, au maximum sous 12 heures ; en cas de conflit la déclaration du chauffeur prime."
+  - "Le dépôt chez un commerçant n'est possible que si le destinataire l'a accepté à la commande."
+  - "Le commerçant partenaire doit être à moins de 500 mètres, avec une garde de sept jours."
+  - "Deux nouvelles présentations sont proposées ; après le troisième échec le colis repart chez l'expéditeur sous cinq jours ouvrés."
+  - "La preuve de livraison associe signature ou nom du réceptionnaire, horodatage, position du véhicule et photo en cas de dépôt."
+  - "La preuve de livraison est conservée deux ans."
+  - "La géolocalisation n'est active que pendant les heures de service, sur la base de l'intérêt légitime."
+  - "Les positions sont anonymisées au bout de 60 jours."
+  - "Les tournées sont reçues du système de planification chaque matin à 5h par fichier."
+  - "Les statuts de livraison sont poussés vers le suivi client à chaque changement, par API REST."
+  - "Une livraison porte le colis, le destinataire, l'adresse, le créneau promis, la tournée, le chauffeur et l'historique des statuts."
+  - "L'objectif est de diviser par deux les appels « où est mon colis » au service client en six mois."
+  - "Le budget réellement validé est de 200 000 €."
+
+unknown:
+  - "La date de mise en service définitive"
+  - "Le nombre de véhicules équipés à l'ouverture"
+  - "Le mode d'hébergement retenu"
+
+behavior:
+  style: precise
+  unknown_rate: 0.1
+  allow_contradictions: false
+
+contradictions:
+  - "Les positions des chauffeurs sont bien conservées trois ans, c'est nécessaire pour l'analyse des tournées."
+  - "Les 45 véhicules seront équipés dès le premier jour, il n'y a pas de pilote."
+  - "Le créneau annoncé au destinataire est de deux heures, jamais d'une heure."

@@ -11,7 +11,7 @@ author targeted questions otherwise, checks new info for contradictions, and fin
 synthesizes a DOCX (via Quarto) plus a QA report. The UI language is French. The only
 interface is a Streamlit app — there is no CLI (`main.py` is an unused `uv` stub).
 
-Full architecture docs live in `docs/00-overview.md` through `docs/06-configuration.md`.
+Full architecture docs live in `docs/00-overview.md` through `docs/07-evaluation.md`.
 `prompt.md` at the repo root is the original build spec and a useful intent reference.
 
 ## Commands
@@ -25,6 +25,10 @@ uv run pytest                        # run the full test suite
 uv run pytest tests/test_routing.py::test_name   # single test
 uv run python scripts/hash_password.py           # bcrypt-hash a password for secrets.toml
 uv run langgraph dev                 # LangGraph dev server (graph exposed via langgraph.json)
+
+uv run python evals/run_evals.py                 # component evals (gap_finder / critic, no graph)
+uv run python evals/run_benchmark.py             # full-graph benchmark, synthetic stakeholder
+uv run python evals/run_benchmark.py --cases cdc_003_ecommerce --cache   # one case, cached
 ```
 
 There is no linter/formatter configured. Match the surrounding style (`from __future__
@@ -101,11 +105,27 @@ re-reads it on every rerun rather than trusting in-memory globals. **Use the Sup
 SESSION pooler (port 5432) or a direct connection — NOT the transaction pooler (6543)**,
 which breaks the prepared-statement config.
 
+### Evaluation
+
+Two harnesses in `evals/`, sharing `evals/harness.py`. `run_evals.py` calls single
+agents directly (fast prompt iteration). `run_benchmark.py` drives the **compiled
+graph** end to end over `evals/datasets/benchmark/` — ten annotated CDC cases with
+ground-truth gaps, contradictions and per-case reference documents — with a synthetic
+stakeholder (`evals/simulator.py`) answering each `interrupt()`. It emits predictions
+plus descriptive stats, never scores; precision/recall/F1 is roadmap Phase 4.
+
+Two things to respect when touching it: a `resolvable_by: "rag"` ground-truth gap must
+not also carry an `expected_answer` (the oracle would mask a retrieval failure), and
+each case runs under `harness.isolate(...)` so its RAG corpus, Chroma index and output
+dir stay private. Full reference: `docs/07-evaluation.md`.
+
 ## Configuration & secrets
 
 - `config/settings.yaml` — `llm` / `embeddings` / `rag` / `loop` / `quarto` settings,
   loaded into typed models by `src/config.py` (memoized via `lru_cache`; call
-  `clear_config_cache()` after editing YAML on disk, as tests do).
+  `clear_config_cache()` after editing YAML on disk, as tests do). The eval harness
+  swaps settings per benchmark case via `set_settings_override(...)`, which sits in
+  front of the cache; outside the harness it is unset and nothing changes.
 - `src/.env` — API keys (`OLLAMA_API_KEY` or `ANTHROPIC_API_KEY`), and optional
   `CDC_LLM_CACHE=1` to memoize structured LLM calls to `.cache/llm/` for fast dev
   iteration (off by default; see `src/llm_cache.py`). Loaded by `src/config.py`.
@@ -115,7 +135,8 @@ which breaks the prepared-statement config.
   Auth uses `streamlit-authenticator`. On Streamlit Cloud, paste the same content into
   the app's Secrets settings.
 
-`.gitignore` excludes `output/*`, `.chroma`, `.cache`, `.env`, `.streamlit`, `prompt.md`.
+`.gitignore` excludes `output/*`, `evals/results/*`, `.chroma`, `.cache`, `.env`,
+`.streamlit`, `prompt.md`. The benchmark **datasets** are committed — they are ground truth.
 
 ## Gotchas
 

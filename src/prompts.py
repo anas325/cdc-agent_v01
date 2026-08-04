@@ -22,6 +22,10 @@ PROMPT_VERSIONS: dict[str, str] = {
     "critic.contradiction": "v1",
     "synthesizer.slot": "v1",
     "final_validator.contradictions": "v1",
+    # Not a graph agent: the synthetic stakeholder that answers question batches
+    # during batch evaluation (evals/simulator.py). Registered here so its calls
+    # are versioned and cached like every other prompt.
+    "simulator.answer": "v1",
 }
 
 

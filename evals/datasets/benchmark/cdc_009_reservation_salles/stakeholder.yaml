@@ -1,0 +1,28 @@
+# Synthetic stakeholder for cdc_009_reservation_salles (negative control).
+#
+# Short profile on purpose: the CDC already answers almost everything, so this
+# stakeholder should rarely be consulted. A run that asks it many questions is
+# over-detecting, and most of those questions will come back "je ne sais pas" —
+# which is the signal, not a defect.
+
+name: "Responsable services généraux"
+role: "Business Owner"
+
+knowledge:
+  - "L'organisateur confirme sa réservation d'un clic, depuis l'écran de la salle ou l'application, entre 15 minutes avant et 10 minutes après l'heure de début."
+  - "Un(e) assistant(e) de direction peut confirmer une réservation à la place de l'organisateur."
+  - "Si Exchange est indisponible, la réservation reste valide dans l'application et l'écriture est rejouée toutes les cinq minutes pendant 24 heures."
+  - "Au-delà de 24 heures d'échec de synchronisation, les services généraux sont alertés."
+  - "Un(e) assistant(e) de direction peut préempter une salle de direction jusqu'à 24 heures avant le créneau."
+  - "En cas de préemption, l'organisateur évincé est notifié avec une proposition de salle équivalente."
+
+unknown:
+  - "Tout ce qui n'est pas la confirmation, la synchronisation Exchange ou la priorité direction"
+
+behavior:
+  style: precise
+  unknown_rate: 0.0
+  allow_contradictions: false
+
+contradictions:
+  - "En fait il n'y a pas de priorité pour les assistantes de direction, tout le monde est traité pareil."

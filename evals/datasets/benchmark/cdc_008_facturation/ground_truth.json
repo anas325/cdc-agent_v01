@@ -1,0 +1,186 @@
+{
+  "case_id": "cdc_008_facturation",
+  "title": "Refonte du moteur de facturation abonnements",
+  "dataset_version": "v1",
+  "annotator": "équipe CDC (relecture experte)",
+  "notes": "Cas règles de gestion / cas limites. Le CDC énonce cinq fonctionnalités en une phrase chacune alors que le référentiel financier fixe des règles précises pour toutes. C'est le cas où le coût d'une lacune manquée est le plus concret : une règle de prorata ou de cumul de remise ratée se traduit par des factures fausses.",
+  "gaps": [
+    {
+      "id": "GT-GAP-001",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "F1 ne dit ni quand la facture est émise, ni si elle est à échoir ou échue, ni quelle est l'échéance de paiement.",
+      "keywords": ["emission", "echeance", "facture"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "regles_facturation_abonnements.md",
+        "quote": "émise le **1er du mois** pour le mois en cours"
+      }
+    },
+    {
+      "id": "GT-GAP-002",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "« La facture est ajustée en conséquence » lors d'un changement de formule : ni date d'effet, ni calcul du prorata, ni limite de changements.",
+      "keywords": ["changement de formule", "prorata"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "regles_facturation_abonnements.md",
+        "quote": "**prorata du nombre de jours restants**"
+      }
+    },
+    {
+      "id": "GT-GAP-003",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "F3 mentionne des remises sans type, plafond, règle de cumul ni circuit de validation.",
+      "keywords": ["remise", "cumul", "plafond"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "regles_facturation_abonnements.md",
+        "quote": "les remises ne se cumulent jamais au-delà de **35 %**"
+      }
+    },
+    {
+      "id": "GT-GAP-004",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "F4 se limite à « une relance » : ni séquence, ni délais, ni suspension de service, ni seuil minimal.",
+      "keywords": ["relance", "impaye", "suspension"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "regles_facturation_abonnements.md",
+        "quote": "21 jours | Mise en demeure, suspension du service"
+      }
+    },
+    {
+      "id": "GT-GAP-005",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "important",
+      "description": "F5 autorise l'émission d'un avoir sans plafond, sans rattachement à une facture, ni circuit de validation.",
+      "keywords": ["avoir", "validation"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "regles_facturation_abonnements.md",
+        "quote": "Un avoir supérieur à **200 € TTC** requiert la validation"
+      }
+    },
+    {
+      "id": "GT-GAP-006",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "important",
+      "description": "La résiliation ne traite pas le droit de rétractation ni les consommations antérieures non réglées.",
+      "keywords": ["resiliation", "retractation"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "regles_facturation_abonnements.md",
+        "quote": "dans les 14 jours** suivant la souscription initiale"
+      }
+    },
+    {
+      "id": "GT-GAP-007",
+      "section_id": "technical",
+      "category": "data_model",
+      "severity": "blocking",
+      "description": "La facture est modélisée par trois champs : ni lignes, ni TVA, ni mentions légales, ni règle de numérotation.",
+      "keywords": ["facture", "numerotation", "tva"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "regles_facturation_abonnements.md",
+        "quote": "séquentielle, continue et sans trou"
+      }
+    },
+    {
+      "id": "GT-GAP-008",
+      "section_id": "constraints",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "« Conforme à la réglementation en vigueur » n'énumère ni les mentions obligatoires, ni la durée de conservation, ni le format d'export comptable.",
+      "keywords": ["reglementation", "conservation", "mentions"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "regles_facturation_abonnements.md",
+        "quote": "Conservation des factures : **10 ans**"
+      }
+    },
+    {
+      "id": "GT-GAP-009",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "important",
+      "description": "« Doit s'exécuter dans la nuit » : aucune fenêtre, ni durée maximale pour 22 000 abonnés, ni comportement en cas d'échec partiel.",
+      "keywords": ["nuit", "duree", "echec"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-010",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "blocking",
+      "description": "Les échanges avec le référentiel client et la comptabilité n'ont ni contrat, ni fréquence, ni gestion des rejets.",
+      "keywords": ["referentiel", "comptabilite", "export"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-011",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "important",
+      "description": "« Les factures sont des documents sensibles » : aucun contrôle d'accès ni exigence d'archivage à valeur probante.",
+      "keywords": ["sensible", "acces", "archivage"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-012",
+      "section_id": "functional",
+      "category": "acceptance_criteria",
+      "severity": "important",
+      "description": "Aucun critère d'acceptation, alors que l'objectif est la suppression des 400 retraitements manuels mensuels.",
+      "keywords": ["critere", "retraitement"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-013",
+      "section_id": "constraints",
+      "category": "scope",
+      "severity": "important",
+      "description": "« Bascule en début d'exercice » sans stratégie de reprise de l'existant ni date ferme.",
+      "keywords": ["bascule", "reprise"],
+      "resolvable_by": "human"
+    }
+  ],
+  "contradictions": [],
+  "expected_answers": [
+    {
+      "gap_ref": "GT-GAP-009",
+      "answer": "Le traitement démarre à 2h et doit être terminé avant 5h. En cas d'échec sur un abonné, le lot continue et les abonnés en erreur sont rejoués dans un second passage à 5h30, avec alerte à la comptabilité.",
+      "keywords": ["2h", "rejoues"]
+    },
+    {
+      "gap_ref": "GT-GAP-010",
+      "answer": "Le référentiel client est la source de vérité des abonnements et pousse ses changements en continu. Les écritures partent vers la comptabilité chaque jour au format FEC ; un rejet comptable bloque la clôture et remonte en alerte, la facture restant valide.",
+      "keywords": ["referentiel", "fec"]
+    },
+    {
+      "gap_ref": "GT-GAP-011",
+      "answer": "Seuls la comptabilité et le service client accèdent aux factures ; le service client ne voit que celles des abonnés dont il a la charge. L'archivage est à valeur probante avec horodatage et empreinte.",
+      "keywords": ["comptabilite", "archivage"]
+    },
+    {
+      "gap_ref": "GT-GAP-012",
+      "answer": "Le projet est accepté si un mois complet est facturé sans aucun retraitement manuel et que l'écart avec l'ancien moteur est nul sur un échantillon de 500 abonnés.",
+      "keywords": ["retraitement", "ecart"]
+    },
+    {
+      "gap_ref": "GT-GAP-013",
+      "answer": "Bascule au 1er janvier, sans reprise des factures historiques : l'ancien moteur reste consultable en lecture seule pendant dix ans pour l'archivage légal.",
+      "keywords": ["bascule", "janvier"]
+    }
+  ]
+}

@@ -1,0 +1,205 @@
+{
+  "case_id": "cdc_001_smartstock",
+  "title": "SmartStock — gestion de stock multi-magasins (RetailPlus)",
+  "dataset_version": "v1",
+  "annotator": "équipe CDC (relecture experte)",
+  "notes": "CDC volontairement truffé de contradictions internes explicites (budget, planning, performance, disponibilité, hébergement, rétention). Aucun document de référence : toutes les lacunes doivent passer par une question à la partie prenante, ce qui fait de ce cas le contrôle 'zéro RAG'.",
+  "gaps": [
+    {
+      "id": "GT-GAP-001",
+      "section_id": "functional",
+      "category": "functional_ambiguity",
+      "severity": "blocking",
+      "description": "Les rôles ne sont pas définis : « les employés peuvent modifier le stock » alors que « les administrateurs disposent de plus de droits », sans matrice de droits.",
+      "keywords": ["role", "modifier", "stock"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-002",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "Le seuil d'alerte de stock faible « dépend du produit » sans règle de calcul ni responsable de son paramétrage.",
+      "keywords": ["seuil", "alerte"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-003",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "blocking",
+      "description": "« Les conflits de modification seront gérés automatiquement » : aucune stratégie de résolution de conflit n'est spécifiée.",
+      "keywords": ["conflit", "modification"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-004",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "blocking",
+      "description": "Le fonctionnement hors ligne est annoncé sans définir les opérations disponibles ni la resynchronisation.",
+      "keywords": ["hors ligne", "internet"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-005",
+      "section_id": "functional",
+      "category": "functional_ambiguity",
+      "severity": "important",
+      "description": "« Le système génère des rapports » : ni le contenu, ni le format d'export, ni la fréquence ne sont précisés.",
+      "keywords": ["rapport", "format"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-006",
+      "section_id": "functional",
+      "category": "acceptance_criteria",
+      "severity": "important",
+      "description": "Aucune fonctionnalité (F1 à F4) n'est accompagnée de critères d'acceptation testables.",
+      "keywords": ["critere", "acceptation"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-007",
+      "section_id": "technical",
+      "category": "data_model",
+      "severity": "blocking",
+      "description": "Le modèle de données est incomplet : « les fournisseurs seront stockés dans une autre base » sans schéma, ni clé de rapprochement avec les produits.",
+      "keywords": ["fournisseur", "base"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-008",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "blocking",
+      "description": "L'intégration ERP / SAP ne précise ni le protocole, ni le sens des échanges, ni la fréquence de synchronisation.",
+      "keywords": ["erp", "sap", "synchronisation"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-009",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "important",
+      "description": "« Toutes les données sont sécurisées » : aucune exigence vérifiable (chiffrement au repos, en transit, gestion des secrets).",
+      "keywords": ["securite", "chiffrement"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-010",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "important",
+      "description": "Aucune volumétrie : nombre de références produits, d'utilisateurs simultanés, de mouvements de stock par jour.",
+      "keywords": ["volumetrie", "utilisateurs simultanes"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-011",
+      "section_id": "constraints",
+      "category": "scope",
+      "severity": "nice_to_have",
+      "description": "La stratégie de déploiement sur les 18 magasins (pilote, vague, big bang) n'est pas dans le périmètre décrit.",
+      "keywords": ["deploiement", "magasin"],
+      "resolvable_by": "human"
+    }
+  ],
+  "contradictions": [
+    {
+      "id": "GT-CON-001",
+      "statement_a": "Budget estimé : 150 000 €",
+      "statement_b": "Le budget ne devra pas dépasser 80 000 €",
+      "section_ids": ["constraints"],
+      "severity": "blocking",
+      "keywords": ["budget"]
+    },
+    {
+      "id": "GT-CON-002",
+      "statement_a": "Livraison prévue : décembre 2026",
+      "statement_b": "Le projet devra être terminé dans un délai de 3 mois",
+      "section_ids": ["constraints"],
+      "severity": "blocking",
+      "keywords": ["delai", "livraison"]
+    },
+    {
+      "id": "GT-CON-003",
+      "statement_a": "Le temps de réponse doit être inférieur à 5 secondes",
+      "statement_b": "Toutes les recherches doivent répondre en moins de 200 ms",
+      "section_ids": ["technical"],
+      "severity": "important",
+      "keywords": ["temps de reponse", "200 ms"]
+    },
+    {
+      "id": "GT-CON-004",
+      "statement_a": "Le système devra être disponible 99%",
+      "statement_b": "Le système devra être toujours disponible",
+      "section_ids": ["technical"],
+      "severity": "important",
+      "keywords": ["disponibilite", "99"]
+    },
+    {
+      "id": "GT-CON-005",
+      "statement_a": "Le système sera déployé sur AWS",
+      "statement_b": "Le système sera installé uniquement sur les serveurs internes",
+      "section_ids": ["technical"],
+      "severity": "blocking",
+      "keywords": ["aws", "serveurs internes"]
+    },
+    {
+      "id": "GT-CON-006",
+      "statement_a": "Respect du RGPD",
+      "statement_b": "Les données pourront être conservées sans limite de durée",
+      "section_ids": ["constraints"],
+      "severity": "blocking",
+      "keywords": ["rgpd", "conservation"]
+    }
+  ],
+  "expected_answers": [
+    {
+      "gap_ref": "GT-GAP-001",
+      "answer": "Seuls les responsables magasin peuvent modifier les quantités en stock. Les employés de magasin ne font que consulter et signaler un écart ; la direction et le responsable logistique ont un accès en lecture sur les 18 magasins.",
+      "keywords": ["role", "modifier"]
+    },
+    {
+      "gap_ref": "GT-GAP-002",
+      "answer": "Le seuil d'alerte est défini par référence produit par le responsable logistique, avec une valeur par défaut égale à la consommation moyenne de 7 jours. L'alerte se déclenche dès que le stock passe sous ce seuil.",
+      "keywords": ["seuil", "alerte"]
+    },
+    {
+      "gap_ref": "GT-GAP-003",
+      "answer": "En cas de modification concurrente, la dernière écriture est refusée et l'utilisateur doit recharger la fiche produit : on n'écrase jamais silencieusement un mouvement de stock.",
+      "keywords": ["conflit", "modification"]
+    },
+    {
+      "gap_ref": "GT-GAP-004",
+      "answer": "Hors ligne, seule la consultation du dernier stock connu est possible. La saisie de mouvements est bloquée et un bandeau signale que les données peuvent être obsolètes.",
+      "keywords": ["hors ligne", "consultation"]
+    },
+    {
+      "gap_ref": "GT-GAP-005",
+      "answer": "Un rapport hebdomadaire par magasin listant les ruptures, les mouvements et les commandes en cours, exportable en Excel et en PDF.",
+      "keywords": ["rapport", "hebdomadaire"]
+    },
+    {
+      "gap_ref": "GT-GAP-007",
+      "answer": "Un fournisseur porte un code, une raison sociale, un contact et un délai de livraison contractuel ; il est rattaché aux produits par le code fournisseur, dans la même base que les produits.",
+      "keywords": ["fournisseur", "code"]
+    },
+    {
+      "gap_ref": "GT-GAP-008",
+      "answer": "La synchronisation avec SAP se fait par export de fichiers plats déposés toutes les nuits sur un serveur SFTP ; SmartStock est la source de vérité pour les quantités, SAP pour les référentiels produits.",
+      "keywords": ["sap", "synchronisation"]
+    },
+    {
+      "gap_ref": "GT-GAP-010",
+      "answer": "Environ 12 000 références produits, 18 magasins, 60 utilisateurs simultanés au maximum et de l'ordre de 5 000 mouvements de stock par jour.",
+      "keywords": ["references", "utilisateurs"]
+    },
+    {
+      "gap_ref": "GT-GAP-011",
+      "answer": "Déploiement en trois vagues : deux magasins pilotes, puis six magasins, puis les dix restants, avec un mois d'écart entre chaque vague.",
+      "keywords": ["deploiement", "vague"]
+    }
+  ]
+}

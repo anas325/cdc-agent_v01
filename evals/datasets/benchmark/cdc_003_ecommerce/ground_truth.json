@@ -1,0 +1,198 @@
+{
+  "case_id": "cdc_003_ecommerce",
+  "title": "Refonte de la boutique en ligne",
+  "dataset_version": "v1",
+  "annotator": "équipe CDC (relecture experte)",
+  "notes": "CDC d'une page, entièrement en adjectifs : « performant », « sécurisé », « scalable », « livré rapidement », « budget maîtrisé ». Densité de lacunes maximale du jeu de données. La politique de sécurité de la DSI en annexe tranche l'authentification, l'hébergement, la disponibilité, la volumétrie et les intégrations — le reste doit passer par une question.",
+  "gaps": [
+    {
+      "id": "GT-GAP-001",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "blocking",
+      "description": "« Le site doit être performant » et « plus rapide » sans aucune cible chiffrée de temps de chargement.",
+      "keywords": ["performant", "temps"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-002",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "blocking",
+      "description": "« Scalable pour supporter la croissance du trafic » : le pic de trafic de référence n'est pas chiffré.",
+      "keywords": ["trafic", "pic", "simultanes"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "politique_securite.md",
+        "quote": "environ 5000 utilisateurs simultanés, 50 commandes/minute en pointe"
+      }
+    },
+    {
+      "id": "GT-GAP-003",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "important",
+      "description": "Aucun objectif de disponibilité ni plan de reprise, alors que la commande et le paiement sont critiques.",
+      "keywords": ["disponibilite", "reprise"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "politique_securite.md",
+        "quote": "disponibilité de 99.9% (SLA), avec sauvegarde quotidienne"
+      }
+    },
+    {
+      "id": "GT-GAP-004",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "blocking",
+      "description": "« Il devra s'intégrer avec nos systèmes existants » : ni les systèmes, ni les contrats d'échange ne sont nommés.",
+      "keywords": ["integration", "systemes existants"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "politique_securite.md",
+        "quote": "ERP : SAP, échange via API REST interne (module OrderSync)"
+      }
+    },
+    {
+      "id": "GT-GAP-005",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "blocking",
+      "description": "Le paiement en ligne est demandé sans désigner de prestataire ni de moyens de paiement acceptés.",
+      "keywords": ["paiement", "prestataire"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "politique_securite.md",
+        "quote": "Paiement : PSP interne \"PayDanone\" (API REST, contrat déjà signé)"
+      }
+    },
+    {
+      "id": "GT-GAP-006",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "blocking",
+      "description": "« Sécurisé » n'est adossé à aucune exigence : authentification, hébergement, protection des données client.",
+      "keywords": ["securise", "authentification"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "politique_securite.md",
+        "quote": "d'entreprise (Azure AD / OIDC)"
+      }
+    },
+    {
+      "id": "GT-GAP-007",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "« Gérer les promotions et les codes de réduction » sans aucune règle de cumul, de plafond ni de durée de validité.",
+      "keywords": ["promotion", "code de reduction"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-008",
+      "section_id": "functional",
+      "category": "functional_ambiguity",
+      "severity": "important",
+      "description": "Le « système de recommandation de produits » n'est décrit ni par ses entrées, ni par son emplacement, ni par son critère de pertinence.",
+      "keywords": ["recommandation"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-009",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "blocking",
+      "description": "Aucun comportement défini pour les cas d'échec du parcours d'achat : paiement refusé, rupture de stock pendant la commande, panier abandonné.",
+      "keywords": ["paiement refuse", "rupture", "panier"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-010",
+      "section_id": "functional",
+      "category": "data_model",
+      "severity": "important",
+      "description": "Le compte client et la commande ne sont pas modélisés : aucune donnée obligatoire ni cycle de vie de commande.",
+      "keywords": ["compte client", "commande"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-011",
+      "section_id": "functional",
+      "category": "functional_ambiguity",
+      "severity": "important",
+      "description": "« Le site doit être disponible sur mobile » : responsive, application native ou PWA n'est pas tranché.",
+      "keywords": ["mobile", "responsive"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-012",
+      "section_id": "functional",
+      "category": "acceptance_criteria",
+      "severity": "important",
+      "description": "Aucune fonctionnalité n'a de critère d'acceptation.",
+      "keywords": ["critere", "acceptation"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-013",
+      "section_id": "problem",
+      "category": "functional_ambiguity",
+      "severity": "important",
+      "description": "« Améliorer l'expérience utilisateur » et « augmenter les ventes » ne sont assortis d'aucun indicateur ni cible chiffrée.",
+      "keywords": ["objectif", "ventes"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-014",
+      "section_id": "constraints",
+      "category": "scope",
+      "severity": "blocking",
+      "description": "« Livré rapidement, avec un budget maîtrisé » : ni date, ni montant. La « phase 2, à définir » laisse le périmètre v1 ouvert.",
+      "keywords": ["budget", "phase 2"],
+      "resolvable_by": "human"
+    }
+  ],
+  "contradictions": [],
+  "expected_answers": [
+    {
+      "gap_ref": "GT-GAP-001",
+      "answer": "Objectif : affichage d'une page catalogue en moins de 1,5 seconde et validation de commande en moins de 3 secondes au 95e centile.",
+      "keywords": ["seconde", "page"]
+    },
+    {
+      "gap_ref": "GT-GAP-007",
+      "answer": "Un seul code de réduction par commande, non cumulable avec une promotion catalogue, plafonné à 30 % du panier et valable sur une période datée.",
+      "keywords": ["code", "cumul"]
+    },
+    {
+      "gap_ref": "GT-GAP-008",
+      "answer": "La recommandation s'affiche sur la fiche produit et dans le panier, basée sur les produits achetés ensemble sur les 90 derniers jours, limitée à quatre produits en stock.",
+      "keywords": ["recommandation", "fiche produit"]
+    },
+    {
+      "gap_ref": "GT-GAP-009",
+      "answer": "Paiement refusé : la commande reste en brouillon et le panier est conservé 30 jours. Rupture pendant la commande : le produit est retiré du panier avec un message explicite avant paiement, jamais après.",
+      "keywords": ["paiement refuse", "panier"]
+    },
+    {
+      "gap_ref": "GT-GAP-010",
+      "answer": "Un compte client porte email, mot de passe, nom, adresses de livraison et de facturation. Une commande suit le cycle brouillon → payée → préparée → expédiée → livrée, avec annulation possible tant qu'elle n'est pas expédiée.",
+      "keywords": ["compte client", "commande"]
+    },
+    {
+      "gap_ref": "GT-GAP-011",
+      "answer": "Site responsive uniquement en v1 : pas d'application native, l'expérience mobile passe par le navigateur.",
+      "keywords": ["responsive", "mobile"]
+    },
+    {
+      "gap_ref": "GT-GAP-013",
+      "answer": "Cible : +15 % de chiffre d'affaires en ligne sur douze mois et un taux de conversion passant de 1,2 % à 2 %.",
+      "keywords": ["conversion", "ventes"]
+    },
+    {
+      "gap_ref": "GT-GAP-014",
+      "answer": "Budget de 220 000 € et mise en ligne avant le Black Friday. La phase 2 couvre la recommandation avancée et le programme de fidélité, hors périmètre v1.",
+      "keywords": ["budget", "phase 2"]
+    }
+  ]
+}

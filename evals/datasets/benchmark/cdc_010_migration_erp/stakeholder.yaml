@@ -1,0 +1,41 @@
+# Synthetic stakeholder for cdc_010_migration_erp.
+#
+# The highest unknown_rate of the set: on a migration, the answers genuinely
+# exist but are scattered across people, and a single sponsor hedges often.
+# This is the case where the assumption path gets the most traffic even in
+# --mode stakeholder.
+
+name: "Directeur des achats groupe"
+role: "Sponsor projet"
+
+knowledge:
+  - "Le standard du progiciel s'applique par défaut ; un écart n'est retenu que pour une obligation légale ou un engagement fournisseur."
+  - "Les écarts au standard sont arbitrés par la direction des achats."
+  - "Trois exercices d'historique sont repris dans le nouvel ERP ; au-delà l'ancien système reste consultable en lecture seule dix ans."
+  - "Les fournisseurs inactifs depuis deux ans ne sont pas repris."
+  - "Une demande d'achat est validée par le responsable de service jusqu'à 5 000 €, par le directeur de site jusqu'à 50 000 €, par la direction des achats au-delà."
+  - "Chaque valideur doit avoir un suppléant nommé."
+  - "Les commandes non réceptionnées sont reprises avec leur reliquat ; les commandes réceptionnées mais non facturées sont soldées dans l'ancien système."
+  - "Quatre interfaces sont concernées : comptabilité, référentiel fournisseurs, portail fournisseurs et entrepôt de données."
+  - "Toutes les interfaces basculent le même week-end que l'ERP, sans fonctionnement en double."
+  - "La référence de performance est l'existant mesuré avant bascule : deux secondes pour afficher une demande, cinq pour éditer une commande."
+  - "Quatre rôles sont conservés : demandeur, acheteur, valideur et administrateur achats."
+  - "La bascule est acceptée si les demandes peuvent être créées et validées le lundi matin, et si le rapprochement facture fonctionne sur 50 commandes reprises."
+  - "Les fonctionnalités utilisées par moins de trois utilisateurs sur douze mois sont candidates à l'abandon."
+  - "L'ancien système reste démarrable deux semaines après la bascule ; la décision de retour arrière se prend au plus tard le mardi suivant."
+  - "Une interruption d'un week-end complet est acceptable, aucune interruption en semaine : les achats rouvrent le lundi 8h."
+
+unknown:
+  - "Les engagements de service et la réversibilité négociés avec l'éditeur"
+  - "La date exacte de la clôture annuelle"
+  - "La liste des sites pilotes"
+
+behavior:
+  style: precise
+  unknown_rate: 0.15
+  allow_contradictions: false
+
+contradictions:
+  - "Le module Achats est repris intégralement, aucune fonctionnalité ne sera abandonnée."
+  - "Les 7 sites basculent en même temps, il n'y a pas de phase pilote."
+  - "L'historique est repris en totalité, sur les onze années."
