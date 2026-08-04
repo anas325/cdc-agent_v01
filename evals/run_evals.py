@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from evals.harness import PROVIDER_DEFAULT_MODEL, override_llm_provider  # noqa: E402,F401
+from evals.harness import override_llm_provider  # noqa: E402
 from src.agents import critic as critic_module  # noqa: E402
 from src.agents import gap_finder as gap_finder_module  # noqa: E402
 from src.state import ContextItem, Gap, SectionConfig, SectionStatus  # noqa: E402

@@ -89,6 +89,7 @@ non-blocking open gaps — see [Graph & Agents](02-graph-and-agents.md#loop-limi
 | [04 — Document Generation](04-document-generation.md) | Quarto template filling, DOCX rendering, QA report |
 | [05 — Streamlit UI](05-streamlit-ui.md) | `src/app.py` — session state, rendering, resuming interrupted runs |
 | [06 — Configuration](06-configuration.md) | `config/settings.yaml`, `config/sections.yaml`, `.env`, `pyproject.toml` dependencies |
+| [07 — Évaluation](07-evaluation.md) | Benchmark annoté, partie prenante synthétique, runner de lot et artefacts de run |
 
 ## Source map
 
@@ -120,6 +121,17 @@ src/
     critic.py                   # global contradiction check after every answer integration
     synthesizer.py              # renders final .qmd/.docx from accepted context
     final_validator.py          # last QA pass, writes qa_report.md
+evals/                         # offline evaluation — see docs/07-evaluation.md
+  run_evals.py                 # component evals: calls gap_finder/critic directly, no graph
+  run_benchmark.py             # batch runner: drives the compiled graph over the benchmark
+  simulator.py                 # synthetic stakeholders answering the interrupt() batches
+  dataset.py                   # benchmark schema + validating loader
+  harness.py                   # provider forcing, per-case settings isolation, run manifest
+  datasets/
+    gap_finder.jsonl           # component eval cases
+    critic.jsonl
+    benchmark/                 # 10 annotated CDC cases (ground truth — committed)
+  results/                     # per-run artifacts (generated, gitignored)
 output/                        # cdc_final.qmd, cdc_final.docx, qa_report.md (generated)
 .chroma/                       # persistent Chroma vector store (generated)
 ```

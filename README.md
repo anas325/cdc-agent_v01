@@ -73,6 +73,26 @@ Off by default, so normal runs are never served stale output. To invalidate,
 delete the directory (`rm -rf .cache/llm`) — editing a prompt, switching model
 or changing `config/sections.yaml` already changes the key on its own.
 
+## Evaluate
+
+```
+uv run pytest                                    # test suite
+uv run python evals/run_evals.py                 # component evals (gap_finder, critic)
+uv run python evals/run_benchmark.py             # full-graph benchmark, no human needed
+```
+
+`run_benchmark.py` replays ten annotated CDC cases through the real graph, with a
+synthetic stakeholder answering every question batch — including "je ne sais pas"
+and, in `--mode realistic`, contradictory answers. Each run writes predictions, a
+transcript of the simulated interaction, per-case artifacts and a reproducibility
+manifest under `evals/results/<run_id>/`. Start with one case:
+
+```
+uv run python evals/run_benchmark.py --cases cdc_003_ecommerce --cache
+```
+
+See [`docs/07-evaluation.md`](docs/07-evaluation.md).
+
 ## Project structure
 
 ```
@@ -83,6 +103,7 @@ src/
   graph.py         # LangGraph orchestration
   agents/          # orchestrator, gap_finder, gap_filler, critic, synthesizer, final_validator
   app.py           # Streamlit UI (entrypoint)
+evals/             # benchmark dataset, synthetic stakeholder, batch runner
 output/            # generated cdc_final.qmd / .docx / qa_report.md
 docs/              # architecture documentation
 ```
