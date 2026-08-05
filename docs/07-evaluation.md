@@ -200,11 +200,12 @@ uv run python evals/run_benchmark.py                                # 10 cas, mo
 uv run python evals/run_benchmark.py --cases cdc_003_ecommerce
 uv run python evals/run_benchmark.py --mode realistic --seed 7
 uv run python evals/run_benchmark.py --provider anthropic --max-turns 8 --cache
+uv run python evals/run_benchmark.py --resume                        # reprend le dernier run
 ```
 
 Options : `--cases`, `--mode`, `--seed`, `--provider`, `--model`,
 `--temperature`, `--top-k`, `--max-turns`, `--max-questions-per-batch`,
-`--cache`, `--run-id`, `--out`.
+`--cache`, `--run-id`, `--out`, `--resume`, `--force`, `--keep-checkpoints`.
 
 Pour chaque cas, le runner envoie exactement ce que `src/app.py::start_run`
 envoie (`initial_cdc_text`, `loop_settings`, `section_statuses`), consomme le
@@ -229,15 +230,28 @@ comme avant : rien ne change pour l'application Streamlit.
 
 ```
 evals/results/<run_id>/
-    manifest.json                   # reproductibilité (roadmap §17)
-    summary.csv                     # une ligne par cas
-    report.md                       # synthèse lisible
+    manifest.json                   # reproductibilité (roadmap §17) — écrit AVANT la boucle
+    summary.csv                     # une ligne par cas — réécrit après CHAQUE cas
+    report.md                       # synthèse lisible — réécrit après CHAQUE cas
     <case_id>/
-        predictions.json            # lacunes, contexte, questions, provenance
+        predictions.json            # lacunes, contexte, questions, provenance — écrit EN DERNIER
         transcript.jsonl            # un objet par tour d'interrupt : questions + réponses simulées
-        telemetry.json              # telemetry.summary() du cas
+        telemetry.json              # telemetry.summary() du cas, sommé sur les segments
+        status.json                 # running | done | error | interrupted
+        steps.jsonl                 # un objet par tour de graphe : nœud, durée, sync_s
+        state.json                  # instantané lisible du CDCState, réécrit à chaque tour
+        segments.json               # temps et télémétrie de chaque processus ayant traité le cas
+        simulator.json              # état du simulateur (RNG, contradictions consommées)
+        checkpoint/                 # état LangGraph, purgé quand le cas est terminé
         artifacts/                  # cdc_final.qmd, qa_report.md, decision_log.jsonl
 ```
+
+Tout est écrit au fil de l'eau, jamais à la fin : le checkpoint après **chaque
+nœud**, le transcript après chaque tour de questions, `summary.csv` et `report.md`
+après chaque cas. Chaque écriture passe par `write_atomic` (fichier temporaire +
+`os.replace`), donc une interruption ne laisse jamais un artefact tronqué.
+`predictions.json` est le seul marqueur de fin — pas l'existence du répertoire,
+créé avant que le cas ne démarre.
 
 `manifest.json` enregistre le commit git (et s'il était sale), la version du jeu
 de données, le fournisseur / modèle / température, le modèle d'embeddings, la
@@ -258,6 +272,50 @@ sans ambiguïté.
 
 `evals/results/` est ignoré par git ; les jeux de données, eux, sont versionnés.
 
+### Reprendre un run interrompu
+
+Un lot complet, c'est dix cas de plusieurs minutes : un Ctrl-C, une coupure
+réseau ou une machine qui redémarre ne doit pas tout coûter.
+
+```bash
+uv run python evals/run_benchmark.py --resume            # le run le plus récent sous --out
+uv run python evals/run_benchmark.py --resume bench_20260805_084151
+```
+
+Deux granularités se combinent :
+
+- **Par cas.** Un cas dont le `predictions.json` existe est ignoré et sa ligne de
+  `summary.csv` est reconstruite depuis le disque (`load_case_row` réutilise
+  `summarize`, donc la ligne est identique à celle d'un run d'une traite). Par
+  convention, un cas terminé en `status: "error"` compte comme fait : il est
+  rapporté tel quel, pas rejoué.
+- **Par tour de graphe.** Le cas en cours, lui, repart de son dernier nœud
+  terminé. `evals/checkpoints.py` rend le checkpointer LangGraph durable **sans
+  dépendance supplémentaire** : `InMemorySaver` garde tout dans trois dicts, et
+  `PersistentDict` (livré avec `langgraph-checkpoint`) est un `defaultdict` qui se
+  sérialise atomiquement sur `sync()`. Le `thread_id` est devenu déterministe
+  (`bench-<case_id>`) pour qu'un second processus s'adresse au même fil.
+
+Ce qu'il faut savoir en touchant à ça :
+
+- `--resume` refuse de mélanger deux configurations (jeu de données, mode et
+  graine du simulateur, fournisseur, modèle) — sans quoi `summary.csv` ne voudrait
+  plus rien dire. `--force` passe outre. Le `manifest.json` d'origine est conservé
+  et gagne un tableau `resumed_at`.
+- Sans `--resume`, réutiliser un `--run-id` **repart de zéro** : `CaseRecorder`
+  purge l'état du cas, sinon on reprendrait un ancien checkpoint sans l'avoir
+  demandé.
+- Le simulateur `stakeholder` / `realistic` est à état (RNG, contradictions
+  consommées) : il est sauvegardé après chaque tour, sinon une reprise rejouerait
+  des tirages déjà dépensés. L'oracle, lui, est une fonction pure.
+- `telemetry.py` est global au processus et remis à zéro par cas ; les segments
+  sont donc sommés (`merge_telemetry`) pour que `llm_calls` / `llm_s` / `retries`
+  / `cache_hits` restent justes après une reprise. La colonne `segments` de
+  `summary.csv` vaut 1 pour un cas d'une traite.
+- Le colonne `sync_s` de `steps.jsonl` mesure le coût de la persistance : tout
+  l'historique de checkpoints est re-sérialisé à chaque tour, donc c'est le
+  chiffre à regarder si un run devient lent.
+
 ---
 
 ## Coût et reproductibilité
@@ -270,7 +328,8 @@ ajoute un appel de simulateur par question. En pratique :
 - `--cache` (`CDC_LLM_CACHE=1`) pour rejouer un run en quelques secondes — les
   identifiants étant des hachages de contenu (`src/ids.py::stable_id`), les
   prompts se répètent à l'identique ;
-- `oracle` par défaut, qui ne consomme aucun appel LLM côté simulateur.
+- `oracle` par défaut, qui ne consomme aucun appel LLM côté simulateur ;
+- `--resume` après une interruption, plutôt que de relancer le lot.
 
 Deux runs `oracle` consécutifs avec le cache produisent les mêmes identifiants
 de lacunes.

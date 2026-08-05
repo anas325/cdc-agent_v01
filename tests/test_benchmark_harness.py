@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import time
 
 import pytest
 
@@ -619,7 +621,7 @@ def test_main_writes_manifest_summary_and_report(tmp_path, monkeypatch):
     """End-to-end CLI shape, with run_case stubbed so no LLM is involved."""
     from evals import run_benchmark
 
-    def fake_run_case(case, *, simulator, loop_settings):
+    def fake_run_case(case, *, simulator, loop_settings, recorder=None):
         return {
             "case_id": case.case_id,
             "title": case.title,
@@ -663,6 +665,518 @@ def test_main_writes_manifest_summary_and_report(tmp_path, monkeypatch):
     )
     assert predictions["status"] == "ok"
     assert (root / "cdc_009_reservation_salles" / "transcript.jsonl").exists()
+
+
+# ---------------------------------------------------------------------------
+# 6. Resumability — a run is ten cases of several minutes, so an interrupt must
+#    cost as little as possible.
+# ---------------------------------------------------------------------------
+
+
+TWO_CASES = "cdc_001_smartstock,cdc_009_reservation_salles"
+
+
+def _fake_record(case, **overrides) -> dict:
+    record = {
+        "case_id": case.case_id,
+        "title": case.title,
+        "thread_id": f"bench-{case.case_id}",
+        "status": "ok",
+        "error": None,
+        "finished": True,
+        "done": True,
+        "stop_reason": None,
+        "turns": 2,
+        "rounds": 1,
+        "segments": 1,
+        "wall_s": 0.1,
+        "gaps": [{"severity": "blocking", "status": "user_answered", "category": "business_rule"}],
+        "context_items": [{"source": "user_answer"}],
+        "asked_questions": [{"id": "q"}],
+        "section_statuses": {"functional": {"status": "complete"}},
+        "transcript": [{"round": 0, "turn": 1, "questions": [], "answers": []}],
+        "telemetry": {"llm_count": 1, "llm_s": 0.0},
+    }
+    record.update(overrides)
+    return record
+
+
+def _csv_rows(root):
+    with open(root / "summary.csv", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def test_file_checkpointer_survives_the_process_that_wrote_it(tmp_path):
+    """The whole basis of mid-case resume: a checkpoint that outlives its saver."""
+    from typing import TypedDict
+
+    from langgraph.graph import END, START, StateGraph
+
+    from evals.checkpoints import discard, has_state, open_saver
+
+    class Toy(TypedDict):
+        n: int
+
+    def build(saver):
+        g = StateGraph(Toy)
+        g.add_node("inc", lambda s: {"n": s["n"] + 1})
+        g.add_edge(START, "inc")
+        g.add_edge("inc", END)
+        return g.compile(checkpointer=saver)
+
+    ckpt = tmp_path / "checkpoint"
+    config = {"configurable": {"thread_id": "t1"}}
+
+    assert has_state(ckpt) is False
+    saver, sync = open_saver(ckpt)
+    assert build(saver).invoke({"n": 1}, config) == {"n": 2}
+    sync()
+    assert has_state(ckpt) is True
+
+    # A different saver object, as a resumed process would build.
+    reopened, _ = open_saver(ckpt)
+    assert build(reopened).get_state(config).values == {"n": 2}
+
+    discard(ckpt)
+    assert has_state(ckpt) is False
+
+
+def test_inmemory_saver_still_keeps_its_state_in_three_dicts():
+    """evals/checkpoints.py swaps these three attributes; fail loudly if renamed."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    saver = InMemorySaver()
+    for name in ("storage", "writes", "blobs"):
+        assert hasattr(saver, name), f"InMemorySaver.{name} is gone — checkpoints.py is broken"
+
+
+def test_run_case_resumes_from_the_last_completed_turn(
+    tmp_path, monkeypatch, scripted_llm, no_rag_hits  # noqa: F811
+):
+    """A case killed mid-graph continues where it stopped, not from turn 0.
+
+    The script below is exactly one full run's worth of responses; the crash is
+    injected *before* the critic consumes any of them, so the two segments
+    together consume precisely what a single uninterrupted run would.
+    """
+    from src.agents.critic import CriticOutput
+    from src.agents.final_validator import FinalCheckOutput
+    from src.agents.gap_filler import QuestionDraft
+    from src.agents.gap_finder import GapCandidate, GapFinderOutput
+    from src.agents.orchestrator import DedupVerdict
+    from src.agents.synthesizer import SlotDraft
+    from evals import run_benchmark
+
+    sections = [
+        SectionConfig(
+            id="functional",
+            title="Spécifications fonctionnelles",
+            description="d",
+            required=True,
+            template_slot="functional_spec",
+        )
+    ]
+    monkeypatch.setattr("src.graph.load_sections", lambda: sections)
+    monkeypatch.setattr("src.graph.ingest_source_docs", lambda: 0)
+    monkeypatch.setattr(run_benchmark, "load_sections", lambda: sections)
+    monkeypatch.setattr("src.agents.synthesizer.subprocess.run", lambda *a, **kw: None)
+
+    # Dies once, the first time the critic is asked to run — i.e. just after the
+    # human answer was integrated, with real work already checkpointed behind it.
+    crashed = {"yet": False}
+
+    def flaky(prompt, model, llm=None, max_retries=2, *, prompt_id=None):
+        if model is CriticOutput and not crashed["yet"]:
+            crashed["yet"] = True
+            raise RuntimeError("le processus est mort ici")
+        return scripted_llm(prompt, model, llm, max_retries, prompt_id=prompt_id)
+
+    for module in ("orchestrator", "gap_finder", "gap_filler", "critic",
+                   "synthesizer", "final_validator"):
+        monkeypatch.setattr(f"src.agents.{module}.call_structured", flaky)
+
+    found = GapFinderOutput(
+        new_gaps=[
+            GapCandidate(
+                section_ids=["functional"],
+                category="business_rule",
+                description="Le seuil d'alerte n'est pas défini.",
+                severity="blocking",
+            )
+        ],
+        resolved_gap_ids=[],
+        section_complete=False,
+    )
+    quiet = GapFinderOutput(new_gaps=[], resolved_gap_ids=[], section_complete=None)
+    complete = GapFinderOutput(new_gaps=[], resolved_gap_ids=[], section_complete=True)
+    scripted_llm.add(GapFinderOutput, found, quiet, quiet, complete, complete, complete, complete)
+    scripted_llm.add(QuestionDraft, QuestionDraft(question_text="Comment est calculé le seuil ?"))
+    scripted_llm.add(DedupVerdict, DedupVerdict(), DedupVerdict(), DedupVerdict())
+    scripted_llm.add(CriticOutput, *[CriticOutput(contradictions=[]) for _ in range(4)])
+    scripted_llm.add(SlotDraft, SlotDraft(prose="Le seuil est défini par référence produit."))
+    scripted_llm.add(FinalCheckOutput, FinalCheckOutput(contradictions=[]))
+
+    case = load_benchmark(case_ids=["cdc_001_smartstock"])[0]
+    out = tmp_path / "results" / "cdc_001_smartstock"
+    base = load_settings()
+    settings = harness.case_settings(
+        base,
+        source_dir=case.source_docs_dir,
+        persist_dir=tmp_path / "chroma",
+        output_dir=out / "artifacts",
+    )
+    loop_settings = base.loop.model_copy(update={"max_turns": 5})
+
+    def drive(*, resume: bool):
+        with run_benchmark.CaseRecorder(out, resume=resume) as recorder:
+            with harness.isolate(settings):
+                return run_benchmark.run_case(
+                    case,
+                    simulator=OracleSimulator(case.ground_truth),
+                    loop_settings=loop_settings,
+                    recorder=recorder,
+                )
+
+    first = drive(resume=False)
+    assert first["status"] == "error"
+    assert "le processus est mort ici" in first["error"]
+
+    steps_after_crash = [json.loads(line) for line in
+                         (out / "steps.jsonl").read_text(encoding="utf-8").splitlines()]
+    # Progress was written turn by turn, not at the end.
+    assert [s["node"] for s in steps_after_crash][:2] == ["ingest", "initial_scan"]
+    assert (out / "checkpoint" / "storage.pkl").stat().st_size > 0
+    # The question round it got through is already durable.
+    assert len((out / "transcript.jsonl").read_text(encoding="utf-8").strip().splitlines()) == 1
+
+    second = drive(resume=True)
+
+    assert second["status"] == "ok", second["error"]
+    assert second["finished"] is True
+    # It continued: same case, two processes, and the trail kept growing.
+    assert second["segments"] == 2
+    steps_after_resume = [json.loads(line) for line in
+                          (out / "steps.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(steps_after_resume) > len(steps_after_crash)
+    assert [s["step"] for s in steps_after_resume] == list(range(1, len(steps_after_resume) + 1))
+    assert "ingest" not in [s["node"] for s in steps_after_resume[len(steps_after_crash):]]
+    # ...and the work from before the crash was not thrown away or redone.
+    assert second["rounds"] == 1
+    assert any(c["source"] == "user_answer" for c in second["context_items"])
+    assert second["wall_s"] >= first["wall_s"]
+    assert second["telemetry"]["llm_count"] >= first["telemetry"]["llm_count"]
+
+
+def test_stakeholder_simulator_state_round_trips():
+    """A resumed process must not re-spend dice the previous one already drew."""
+    profile = _profile(contradictions=["Non, c'est 48h."])
+    first = StakeholderSimulator(profile, seed=3, mode="realistic")
+    drawn = [first._rng.random() for _ in range(5)]
+    first._contradictions_used = 1
+
+    resumed = StakeholderSimulator(profile, seed=3, mode="realistic")
+    resumed.set_state(json.loads(json.dumps(first.get_state())))  # as it lands on disk
+
+    assert resumed._contradictions_used == 1
+    assert [resumed._rng.random() for _ in range(3)] == [first._rng.random() for _ in range(3)]
+    assert drawn  # the pre-crash draws are not replayed
+
+
+def test_oracle_simulator_has_nothing_to_restore():
+    oracle = OracleSimulator(_ground_truth())
+    oracle.set_state({"anything": True})  # must not raise
+    assert oracle.get_state() == {"mode": "oracle"}
+
+
+def test_merge_telemetry_sums_across_segments():
+    from evals.run_benchmark import merge_telemetry
+
+    def segment(llm_s, count):
+        return {
+            "compute_s": llm_s * 2, "wait_s": 0.0, "llm_s": llm_s,
+            "node_count": count, "llm_count": count, "retry_count": 1,
+            "failure_count": 0, "cache_hit_count": 2,
+            "by_node": {"gap_finder": {"count": count, "total_s": llm_s, "max_s": llm_s}},
+            "by_schema": {"GapFinderOutput": {"count": count, "total_s": llm_s, "max_s": llm_s,
+                                              "retried": 1, "failed": 0}},
+        }
+
+    merged = merge_telemetry([segment(2.0, 3), segment(4.0, 5)])
+
+    assert (merged["llm_count"], merged["llm_s"], merged["retry_count"]) == (8, 6.0, 2)
+    assert merged["cache_hit_count"] == 4
+    assert merged["by_node"]["gap_finder"]["count"] == 8
+    assert merged["by_schema"]["GapFinderOutput"]["retried"] == 2
+    # max is a max, not a sum; shares are ratios, so they get recomputed.
+    assert merged["by_node"]["gap_finder"]["max_s"] == 4.0
+    assert merged["by_schema"]["GapFinderOutput"]["share"] == pytest.approx(1.0)
+    assert merge_telemetry([]) == {}
+    assert merge_telemetry([{}, segment(1.0, 1)]) == segment(1.0, 1)
+
+
+def test_load_case_row_matches_a_live_summary_row(tmp_path):
+    from evals.run_benchmark import _dumps, load_case_row, summarize, write_atomic
+
+    case_out = tmp_path / "cdc_001_smartstock"
+    case_out.mkdir()
+    record = _fake_record(load_benchmark(case_ids=["cdc_001_smartstock"])[0])
+
+    assert load_case_row(case_out) is None  # nothing written yet
+    write_atomic(case_out / "telemetry.json", _dumps(record["telemetry"]))
+    write_atomic(
+        case_out / "predictions.json",
+        _dumps({k: v for k, v in record.items() if k != "telemetry"}),
+    )
+
+    assert load_case_row(case_out) == summarize(record)
+
+
+def test_resume_skips_finished_cases_and_keeps_manifest_order(tmp_path, monkeypatch):
+    from evals import run_benchmark
+
+    seen: list[str] = []
+
+    def stub(case, *, simulator, loop_settings, recorder=None):
+        seen.append(case.case_id)
+        return _fake_record(case)
+
+    monkeypatch.setattr(run_benchmark, "run_case", stub)
+    assert run_benchmark.main(
+        ["--cases", TWO_CASES, "--run-id", "unit_run", "--out", str(tmp_path)]
+    ) == 0
+    assert seen == ["cdc_001_smartstock", "cdc_009_reservation_salles"]
+
+    # Wipe the second case so only it has work left to do.
+    for name in ("predictions.json", "telemetry.json"):
+        (tmp_path / "unit_run" / "cdc_009_reservation_salles" / name).unlink()
+    seen.clear()
+
+    assert run_benchmark.main(
+        ["--cases", TWO_CASES, "--resume", "unit_run", "--out", str(tmp_path)]
+    ) == 0
+    assert seen == ["cdc_009_reservation_salles"]
+
+    rows = _csv_rows(tmp_path / "unit_run")
+    assert [r["case_id"] for r in rows] == ["cdc_001_smartstock", "cdc_009_reservation_salles"]
+    manifest = json.loads((tmp_path / "unit_run" / "manifest.json").read_text(encoding="utf-8"))
+    assert len(manifest["resumed_at"]) == 1
+    assert manifest["case_ids"] == ["cdc_001_smartstock", "cdc_009_reservation_salles"]
+
+
+def test_resume_covers_exactly_the_run_it_resumes(tmp_path, monkeypatch):
+    """A bare --resume takes its case list from the run, not from the dataset.
+
+    Without this, `--cases one_case` followed by `--resume` silently widens a
+    one-case run into a ten-case one, and starts with a case the original run
+    never touched.
+    """
+    from evals import run_benchmark
+
+    seen: list[str] = []
+
+    def stub(case, *, simulator, loop_settings, recorder=None):
+        seen.append(case.case_id)
+        if case.case_id == "cdc_009_reservation_salles":
+            raise KeyboardInterrupt
+        return _fake_record(case)
+
+    monkeypatch.setattr(run_benchmark, "run_case", stub)
+    assert run_benchmark.main(
+        ["--cases", TWO_CASES, "--run-id", "unit_run", "--out", str(tmp_path)]
+    ) == 130
+    seen.clear()
+
+    def calm(case, *, simulator, loop_settings, recorder=None):
+        seen.append(case.case_id)
+        return _fake_record(case)
+
+    monkeypatch.setattr(run_benchmark, "run_case", calm)
+    assert run_benchmark.main(["--resume", "unit_run", "--out", str(tmp_path)]) == 0
+
+    assert seen == ["cdc_009_reservation_salles"]  # not every case in the dataset
+    manifest = json.loads((tmp_path / "unit_run" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["case_ids"] == ["cdc_001_smartstock", "cdc_009_reservation_salles"]
+    assert [r["case_id"] for r in _csv_rows(tmp_path / "unit_run")] == manifest["case_ids"]
+
+
+def test_resume_narrowed_to_one_case_keeps_the_others_rows(tmp_path, monkeypatch):
+    from evals import run_benchmark
+
+    def stub(case, *, simulator, loop_settings, recorder=None):
+        if case.case_id == "cdc_009_reservation_salles":
+            raise KeyboardInterrupt
+        return _fake_record(case)
+
+    monkeypatch.setattr(run_benchmark, "run_case", stub)
+    assert run_benchmark.main(
+        ["--cases", TWO_CASES, "--run-id", "unit_run", "--out", str(tmp_path)]
+    ) == 130
+
+    monkeypatch.setattr(
+        run_benchmark, "run_case",
+        lambda case, *, simulator, loop_settings, recorder=None: _fake_record(case),
+    )
+    assert run_benchmark.main(
+        ["--resume", "unit_run", "--cases", "cdc_009_reservation_salles", "--out", str(tmp_path)]
+    ) == 0
+
+    # The case that finished before the interrupt is still in the CSV.
+    assert [r["case_id"] for r in _csv_rows(tmp_path / "unit_run")] == [
+        "cdc_001_smartstock", "cdc_009_reservation_salles"
+    ]
+
+
+def test_resume_does_not_retry_a_case_that_ended_in_error(tmp_path, monkeypatch):
+    from evals import run_benchmark
+
+    seen: list[str] = []
+
+    def stub(case, *, simulator, loop_settings, recorder=None):
+        seen.append(case.case_id)
+        return _fake_record(case, status="error", error="boom", finished=False)
+
+    monkeypatch.setattr(run_benchmark, "run_case", stub)
+    assert run_benchmark.main(
+        ["--cases", "cdc_001_smartstock", "--run-id", "unit_run", "--out", str(tmp_path)]
+    ) == 1
+
+    seen.clear()
+    # A recorded error counts as done: the run reports it again without re-running it.
+    assert run_benchmark.main(
+        ["--cases", "cdc_001_smartstock", "--resume", "unit_run", "--out", str(tmp_path)]
+    ) == 1
+    assert seen == []
+    assert (tmp_path / "unit_run" / "cdc_001_smartstock" / "status.json").exists()
+
+
+def test_run_outputs_are_written_after_every_case(tmp_path, monkeypatch):
+    """Case 2 blowing up must not cost case 1's row, the report or the manifest."""
+    from evals import run_benchmark
+
+    def stub(case, *, simulator, loop_settings, recorder=None):
+        if case.case_id == "cdc_009_reservation_salles":
+            raise MemoryError("the process is gone")
+        return _fake_record(case)
+
+    monkeypatch.setattr(run_benchmark, "run_case", stub)
+    with pytest.raises(MemoryError):
+        run_benchmark.main(["--cases", TWO_CASES, "--run-id", "unit_run", "--out", str(tmp_path)])
+
+    root = tmp_path / "unit_run"
+    assert json.loads((root / "manifest.json").read_text(encoding="utf-8"))["run_id"] == "unit_run"
+    assert [r["case_id"] for r in _csv_rows(root)] == ["cdc_001_smartstock"]
+    assert "Benchmark run report" in (root / "report.md").read_text(encoding="utf-8")
+    # The dead case is marked, not left as an ambiguous empty directory.
+    status = json.loads(
+        (root / "cdc_009_reservation_salles" / "status.json").read_text(encoding="utf-8")
+    )
+    assert status["state"] == "running"
+    assert not (root / "cdc_009_reservation_salles" / "predictions.json").exists()
+
+
+def test_ctrl_c_flushes_what_is_done_and_asks_to_be_resumed(tmp_path, monkeypatch, capsys):
+    from evals import run_benchmark
+
+    def stub(case, *, simulator, loop_settings, recorder=None):
+        if case.case_id == "cdc_009_reservation_salles":
+            raise KeyboardInterrupt
+        return _fake_record(case)
+
+    monkeypatch.setattr(run_benchmark, "run_case", stub)
+    assert run_benchmark.main(
+        ["--cases", TWO_CASES, "--run-id", "unit_run", "--out", str(tmp_path)]
+    ) == 130
+
+    root = tmp_path / "unit_run"
+    assert [r["case_id"] for r in _csv_rows(root)] == ["cdc_001_smartstock"]
+    status = json.loads(
+        (root / "cdc_009_reservation_salles" / "status.json").read_text(encoding="utf-8")
+    )
+    assert status["state"] == "interrupted"
+    assert not (root / "cdc_009_reservation_salles" / "predictions.json").exists()
+    assert "--resume unit_run" in capsys.readouterr().err
+
+
+def test_a_rerun_without_resume_starts_the_case_over(tmp_path, monkeypatch):
+    """Reusing a --run-id must not silently continue from the old checkpoint."""
+    from evals import run_benchmark
+
+    seen: list[str] = []
+
+    def stub(case, *, simulator, loop_settings, recorder=None):
+        seen.append(case.case_id)
+        assert recorder.resumable() is False  # reset() dropped the previous attempt
+        assert recorder.load_transcript() == []
+        return _fake_record(case)
+
+    monkeypatch.setattr(run_benchmark, "run_case", stub)
+    argv = ["--cases", "cdc_001_smartstock", "--run-id", "unit_run", "--out", str(tmp_path)]
+    assert run_benchmark.main(argv) == 0
+    # Plant a checkpoint the second attempt must ignore.
+    (tmp_path / "unit_run" / "cdc_001_smartstock" / "checkpoint").mkdir(exist_ok=True)
+    (tmp_path / "unit_run" / "cdc_001_smartstock" / "checkpoint" / "storage.pkl").write_bytes(b"x")
+    assert run_benchmark.main(argv) == 0
+    assert seen == ["cdc_001_smartstock", "cdc_001_smartstock"]
+
+
+def test_resume_refuses_to_mix_two_configurations(tmp_path, monkeypatch, capsys):
+    from evals import run_benchmark
+
+    seen: list[str] = []
+
+    def stub(case, *, simulator, loop_settings, recorder=None):
+        seen.append(case.case_id)
+        return _fake_record(case)
+
+    monkeypatch.setattr(run_benchmark, "run_case", stub)
+    base = ["--cases", "cdc_001_smartstock", "--out", str(tmp_path)]
+    assert run_benchmark.main([*base, "--run-id", "unit_run", "--seed", "0"]) == 0
+    seen.clear()
+
+    assert run_benchmark.main([*base, "--resume", "unit_run", "--seed", "7"]) == 1
+    assert "seed" in capsys.readouterr().err
+    assert seen == []
+
+    assert run_benchmark.main([*base, "--resume", "unit_run", "--seed", "7", "--force"]) == 0
+
+
+def test_bare_resume_picks_the_most_recent_run(tmp_path, monkeypatch):
+    from evals import run_benchmark
+
+    monkeypatch.setattr(
+        run_benchmark, "run_case",
+        lambda case, *, simulator, loop_settings, recorder=None: _fake_record(case),
+    )
+    assert run_benchmark.main(
+        ["--cases", "cdc_001_smartstock", "--run-id", "older", "--out", str(tmp_path)]
+    ) == 0
+    assert run_benchmark.main(
+        ["--cases", "cdc_001_smartstock", "--run-id", "newer", "--out", str(tmp_path)]
+    ) == 0
+    # Make the intended winner unambiguously the newest.
+    os.utime(tmp_path / "newer", (time.time() + 10, time.time() + 10))
+
+    assert run_benchmark.main(["--cases", "cdc_001_smartstock", "--resume", "--out", str(tmp_path)]) == 0
+    newer = json.loads((tmp_path / "newer" / "manifest.json").read_text(encoding="utf-8"))
+    older = json.loads((tmp_path / "older" / "manifest.json").read_text(encoding="utf-8"))
+    assert newer.get("resumed_at") and not older.get("resumed_at")
+
+    assert run_benchmark.main(["--resume", "--out", str(tmp_path / "empty")]) == 1
+
+
+def test_write_atomic_leaves_no_half_written_file(tmp_path, monkeypatch):
+    from evals.run_benchmark import write_atomic
+
+    target = tmp_path / "summary.csv"
+    write_atomic(target, "good\n")
+
+    real_replace = os.replace
+    monkeypatch.setattr(os, "replace", lambda *a, **kw: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(OSError):
+        write_atomic(target, "truncated")
+    monkeypatch.setattr(os, "replace", real_replace)
+
+    assert target.read_text(encoding="utf-8") == "good\n"
 
 
 def test_benchmark_dir_is_where_the_loader_looks():

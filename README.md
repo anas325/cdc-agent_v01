@@ -91,6 +91,16 @@ manifest under `evals/results/<run_id>/`. Start with one case:
 uv run python evals/run_benchmark.py --cases cdc_003_ecommerce --cache
 ```
 
+A full run is ten cases of several minutes, so it is written to disk as it goes —
+the graph checkpoint after every node, the transcript after every question round,
+`summary.csv` and `report.md` after every case — and can be picked back up:
+
+```
+uv run python evals/run_benchmark.py --resume    # skips finished cases, and the
+                                                 # unfinished one continues from
+                                                 # its last completed graph turn
+```
+
 See [`docs/07-evaluation.md`](docs/07-evaluation.md).
 
 ## Project structure

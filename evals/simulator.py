@@ -100,6 +100,12 @@ class Simulator(Protocol):
 
     def answer(self, questions: list[dict], state: CDCState) -> AnswerBatch: ...
 
+    # Whatever a resumed process must restore to keep answering as if it had
+    # never stopped. JSON-serialisable; see run_benchmark.py's simulator.json.
+    def get_state(self) -> dict: ...
+
+    def set_state(self, state: dict) -> None: ...
+
 
 # ---------------------------------------------------------------------------
 # Text matching (shared by the oracle and, later, the Phase 4 scorer)
@@ -146,6 +152,13 @@ class OracleSimulator:
     def __init__(self, ground_truth: GroundTruth, threshold: float = MATCH_THRESHOLD):
         self.ground_truth = ground_truth
         self.threshold = threshold
+
+    def get_state(self) -> dict:
+        """Nothing to carry: the oracle is a pure function of the question."""
+        return {"mode": self.mode}
+
+    def set_state(self, state: dict) -> None:
+        return None
 
     def answer(self, questions: list[dict], state: CDCState) -> AnswerBatch:
         gaps_by_id = {g.id: g for g in state.get("gaps", [])}
@@ -282,6 +295,28 @@ class StakeholderSimulator:
         self._rng = random.Random(seed)
         self._contradictions = list(profile.contradictions)
         self._contradictions_used = 0
+
+    def get_state(self) -> dict:
+        """The two things that make this simulator stateful.
+
+        A resumed run that restarted the RNG at the seed would replay dice already
+        spent on earlier rounds, so a case answered across two processes would
+        diverge from the same case answered in one.
+        """
+        return {
+            "mode": self.mode,
+            "rng": self._rng.getstate(),
+            "contradictions_used": self._contradictions_used,
+        }
+
+    def set_state(self, state: dict) -> None:
+        rng = state.get("rng")
+        if rng:
+            # A JSON round-trip turns random.getstate()'s nested tuples into lists,
+            # and setstate() insists on tuples.
+            version, internal, gauss = rng
+            self._rng.setstate((version, tuple(internal), gauss))
+        self._contradictions_used = state.get("contradictions_used", 0)
 
     def answer(self, questions: list[dict], state: CDCState) -> AnswerBatch:
         gaps_by_id = {g.id: g for g in state.get("gaps", [])}

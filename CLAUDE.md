@@ -29,6 +29,7 @@ uv run langgraph dev                 # LangGraph dev server (graph exposed via l
 uv run python evals/run_evals.py                 # component evals (gap_finder / critic, no graph)
 uv run python evals/run_benchmark.py             # full-graph benchmark, synthetic stakeholder
 uv run python evals/run_benchmark.py --cases cdc_003_ecommerce --cache   # one case, cached
+uv run python evals/run_benchmark.py --resume                            # continue the last run
 ```
 
 There is no linter/formatter configured. Match the surrounding style (`from __future__
@@ -118,6 +119,18 @@ Two things to respect when touching it: a `resolvable_by: "rag"` ground-truth ga
 not also carry an `expected_answer` (the oracle would mask a retrieval failure), and
 each case runs under `harness.isolate(...)` so its RAG corpus, Chroma index and output
 dir stay private. Full reference: `docs/07-evaluation.md`.
+
+**The benchmark is resumable, so nothing is buffered until the end.** Every artifact
+goes through `write_atomic` and is written as it happens — the graph checkpoint after
+each node, the transcript after each question round, `summary.csv`/`report.md` after
+each case, `manifest.json` before the loop. Keep it that way when editing
+`run_benchmark.py`. `predictions.json` is the completion marker `--resume` reads (and
+a case that ended in error counts as done). Mid-case resume works because
+`evals/checkpoints.py` backs LangGraph's `InMemorySaver` with `PersistentDict` on
+disk — no extra dependency — and `thread_id` is deterministic (`bench-<case_id>`).
+Anything stateful a case relies on must be persisted per turn too: that is why the
+stakeholder simulator has `get_state`/`set_state`, and why per-process telemetry is
+summed back together by `merge_telemetry`.
 
 ## Configuration & secrets
 
