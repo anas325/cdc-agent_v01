@@ -26,6 +26,10 @@ PROMPT_VERSIONS: dict[str, str] = {
     # during batch evaluation (evals/simulator.py). Registered here so its calls
     # are versioned and cached like every other prompt.
     "simulator.answer": "v1",
+    # Also not a graph agent: the optional LLM judge that rates question quality
+    # during scoring (evals/scoring.py, `run_scoring.py --judge llm`). It never
+    # feeds the run — it only grades one after the fact.
+    "judge.question_quality": "v1",
 }
 
 

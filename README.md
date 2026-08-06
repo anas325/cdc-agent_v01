@@ -79,6 +79,7 @@ or changing `config/sections.yaml` already changes the key on its own.
 uv run pytest                                    # test suite
 uv run python evals/run_evals.py                 # component evals (gap_finder, critic)
 uv run python evals/run_benchmark.py             # full-graph benchmark, no human needed
+uv run python evals/run_scoring.py               # score the last run against ground truth
 ```
 
 `run_benchmark.py` replays ten annotated CDC cases through the real graph, with a
@@ -101,6 +102,20 @@ uv run python evals/run_benchmark.py --resume    # skips finished cases, and the
                                                  # its last completed graph turn
 ```
 
+`run_scoring.py` then turns those predictions into scores: gap and contradiction
+precision / recall / F1 by category, a severity confusion matrix and blocking-gap
+recall, RAG Recall@K and MRR, six-dimension question quality, and human
+intervention reduction — written as `scores.json`, `scores.csv` and a readable
+`scores.md` beside the run.
+
+```
+uv run python evals/run_scoring.py --run bench_20260805_130607
+uv run python evals/run_benchmark.py --cases cdc_003_ecommerce --cache --score
+```
+
+Scoring is a separate pass on purpose: it is offline and takes seconds, so an
+improved scorer can be replayed over a run that already cost two hours.
+
 See [`docs/07-evaluation.md`](docs/07-evaluation.md).
 
 ## Project structure
@@ -113,7 +128,7 @@ src/
   graph.py         # LangGraph orchestration
   agents/          # orchestrator, gap_finder, gap_filler, critic, synthesizer, final_validator
   app.py           # Streamlit UI (entrypoint)
-evals/             # benchmark dataset, synthetic stakeholder, batch runner
+evals/             # benchmark dataset, synthetic stakeholder, batch runner, scorer
 output/            # generated cdc_final.qmd / .docx / qa_report.md
 docs/              # architecture documentation
 ```

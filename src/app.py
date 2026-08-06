@@ -35,6 +35,7 @@ from src import db, telemetry
 from src.config import load_sections, load_settings
 from src.decisions import confidence_band, format_evidence
 from src.graph import build_graph
+from src.quality import score_section
 from src.state import LoopSettings, SectionStatus
 from src.telemetry import format_duration
 
@@ -105,23 +106,6 @@ VALIDATION_BADGE = {
     "unreviewed": "gray",
 }
 CONFIDENCE_BADGE = {"high": "green", "medium": "orange", "low": "red", "unknown": "gray"}
-
-CATEGORY_WEIGHTS = {
-    "contradiction": 2.0,
-    "scope": 1.5,
-    "functional_ambiguity": 1.4,
-    "business_rule": 1.3,
-    "acceptance_criteria": 1.2,
-    "integration": 1.2,
-    "data_model": 1.2,
-    "nfr": 1.0,
-    "edge_case": 0.8,
-}
-SEVERITY_WEIGHTS = {
-    "blocking": 10,
-    "important": 5,
-    "nice_to_have": 1,
-}
 
 st.set_page_config(page_title="CDC Refinement Agent", layout="wide")
 
@@ -295,15 +279,6 @@ def load_run_into_session(thread_id: str) -> None:
     else:
         st.session_state.pending_questions = None
         st.session_state.finished = bool(values.get("done"))
-
-
-def score_section(gaps: list[dict]) -> float:
-    penalty = 0.0
-
-    for gap in gaps:
-        penalty += SEVERITY_WEIGHTS[gap["severity"]] * CATEGORY_WEIGHTS[gap["category"]]
-
-    return max(0.0, 100 - penalty)
 
 
 # ---------------------------------------------------------------------------

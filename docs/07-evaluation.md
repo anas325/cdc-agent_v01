@@ -1,29 +1,39 @@
-# 07 — Évaluation : benchmark, partie prenante synthétique, runner de lot
+# 07 — Évaluation : benchmark, partie prenante synthétique, runner de lot, notation
 
-Ce document couvre les phases 2 et 3 de `roadmap.md` : un jeu de données annoté
+Ce document couvre les phases 2 à 4 de `roadmap.md` : un jeu de données annoté
 de cahiers des charges, une partie prenante synthétique qui répond à la place de
-l'humain, et un runner déterministe qui enchaîne des exécutions complètes du
-graphe sans intervention.
+l'humain, un runner déterministe qui enchaîne des exécutions complètes du graphe
+sans intervention, et un **scorer** qui confronte le résultat à la vérité
+terrain.
 
-Ce que ce dispositif produit : des **prédictions** et des **statistiques
-descriptives**. Ce qu'il ne produit pas encore : precision / recall / F1,
-blocking-gap recall, Recall@K du RAG, score de qualité des questions — c'est la
-phase 4, qui consommera `predictions.json` et `ground_truth.json` sans que le
-jeu de données ait à changer.
+La séparation est volontaire et structure tout le reste :
+
+```text
+run_benchmark.py  ->  predictions.json   (ce que le système a trouvé)
+                            +
+                      ground_truth.json  (ce qu'il aurait dû trouver)
+                            |
+                            v
+run_scoring.py    ->  scores.json / scores.csv / scores.md
+```
+
+Le runner ne note rien, le scorer n'exécute rien. Une notation coûte quelques
+secondes et aucun appel LLM : on peut donc rejouer un scorer amélioré sur un run
+de deux heures déjà terminé, ce qui serait impossible si les deux étaient soudés.
 
 ---
 
-## Deux harnais, deux niveaux
+## Trois harnais, trois niveaux
 
-| | `evals/run_evals.py` | `evals/run_benchmark.py` |
-|---|---|---|
-| Portée | un agent isolé (`run_gap_finder`, `run_critic`) | le graphe compilé, de bout en bout |
-| LangGraph | contourné | réel (checkpointer, interrupt, routage) |
-| Humain | absent (pas de boucle Q/R) | simulé |
-| Données | `evals/datasets/*.jsonl` | `evals/datasets/benchmark/` |
-| Usage | itérer vite sur un prompt | mesurer le système |
+| | `evals/run_evals.py` | `evals/run_benchmark.py` | `evals/run_scoring.py` |
+|---|---|---|---|
+| Portée | un agent isolé (`run_gap_finder`, `run_critic`) | le graphe compilé, de bout en bout | un run déjà écrit sur disque |
+| LangGraph | contourné | réel (checkpointer, interrupt, routage) | absent |
+| Humain | absent (pas de boucle Q/R) | simulé | — |
+| Données | `evals/datasets/*.jsonl` | `evals/datasets/benchmark/` | `evals/results/<run_id>/` + `ground_truth.json` |
+| Usage | itérer vite sur un prompt | mesurer le système | noter la mesure |
 
-Les deux partagent `evals/harness.py`.
+Les deux premiers partagent `evals/harness.py`.
 
 ---
 
@@ -233,8 +243,9 @@ evals/results/<run_id>/
     manifest.json                   # reproductibilité (roadmap §17) — écrit AVANT la boucle
     summary.csv                     # une ligne par cas — réécrit après CHAQUE cas
     report.md                       # synthèse lisible — réécrit après CHAQUE cas
+    scores.json / .csv / .md        # notation (phase 4) — écrits par run_scoring.py
     <case_id>/
-        predictions.json            # lacunes, contexte, questions, provenance — écrit EN DERNIER
+        predictions.json            # lacunes, contexte, questions, provenance, journal de décisions
         transcript.jsonl            # un objet par tour d'interrupt : questions + réponses simulées
         telemetry.json              # telemetry.summary() du cas, sommé sur les segments
         status.json                 # running | done | error | interrupted
@@ -263,7 +274,15 @@ du simulateur. Deux runs ne sont comparables que si ces champs le permettent.
 RAG / humain / hypothèse, questions posées, « je ne sais pas », sections
 complètes, temps, appels LLM, cache. La répartition RAG / humain / hypothèse est
 la matière première de la « réduction d'intervention humaine » du roadmap §26 —
-le ratio lui-même sera calculé en phase 4.
+le ratio lui-même est calculé par le scorer.
+
+`predictions.json` embarque aussi le **journal de décisions** du cas. Ce n'est
+pas une commodité : l'ordre de classement des extraits RAG ne survit nulle part
+ailleurs. Une récupération *rejetée* ne laisse aucun `ContextItem` derrière elle,
+seulement une entrée `rag_rejected` avec ses `evidence_ids` — sans elle, le
+Recall@K ne serait mesuré que là où la récupération a marché. Les incohérences
+transverses du validateur final n'existent, de même, que dans les `details` de
+son entrée `final_check`.
 
 `transcript.jsonl` porte, pour chaque réponse, un `reason` (`matched`,
 `no_ground_truth`, `unknown`, `hedged`, `contradiction`, `simulator_error`) et le
@@ -336,11 +355,136 @@ de lacunes.
 
 ---
 
-## Ce que la phase 4 branchera dessus
+## La notation (phase 4)
 
-Un scorer lisant `predictions.json` + `ground_truth.json`, sans toucher au jeu de
-données : precision / recall / F1 par catégorie de lacune, matrice de confusion
-des sévérités et **blocking-gap recall**, precision / recall des contradictions,
-Recall@K et MRR du RAG (via `expected_evidence` face aux `evidence` des
-`ContextItem` de source `rag`), qualité des questions, et réduction
-d'intervention humaine à partir des colonnes de `summary.csv`.
+```bash
+uv run python evals/run_scoring.py                          # le run le plus récent
+uv run python evals/run_scoring.py --run bench_20260805_130607
+uv run python evals/run_scoring.py --cases cdc_003_ecommerce
+uv run python evals/run_scoring.py --judge llm              # + juge LLM des questions
+uv run python evals/run_benchmark.py --cases cdc_003_ecommerce --score   # enchaîné
+```
+
+Le calcul vit dans `evals/scoring.py` (fonctions pures sur des dictionnaires),
+les entrées / sorties et le rapport dans `evals/run_scoring.py`. Le scorer
+**n'écrit jamais** dans ce qu'il lit : `predictions.json`, les transcripts et les
+checkpoints sont des entrées, et relancer la notation deux fois produit le même
+fichier.
+
+### L'appariement, et pourquoi il est par contenu
+
+Les identifiants de lacunes sont des hachages de contenu calculés pendant le run
+(`src/ids.py::stable_id`) : une annotation ne peut pas les nommer à l'avance. Une
+lacune prédite est appariée à une lacune annotée quand une part suffisante des
+`keywords` de l'annotation se retrouve dans sa description, sa catégorie, ses
+sections et sa question — seuil **0,5**, via `keyword_score` de
+`evals/simulator.py`, la fonction que l'oracle utilise déjà pour savoir à quelle
+lacune il répond. Les deux ne peuvent donc pas diverger.
+
+L'appariement est **un pour un** et glouton (meilleur score d'abord, égalités
+départagées par les identifiants) : deux lacunes prédites ne peuvent pas réclamer
+la même annotation, et un rejeu apparie à l'identique. Appartenir à la bonne
+section ajoute un bonus de classement, mais n'est jamais un filtre : une lacune
+bien décrite mais rangée dans la mauvaise section reste une détection.
+
+### Ce qui est mesuré
+
+| Famille | Contenu | Roadmap |
+|---|---|---|
+| `gaps` | P / R / F1 micro, par catégorie et par sévérité, matrice de confusion des sévérités, **blocking-gap recall**, accord de catégorie | §7, §8 |
+| `contradictions` | P / R / F1, rappel des contradictions critiques | §9 |
+| `retrieval` | Recall@1/3/5, MRR, séparation « problème de récupération » / « problème de raisonnement » | §10 |
+| `questions` | six dimensions notées 0 / 1 / 2, questions par lacune résolue | §11 |
+| `effort` | réduction d'intervention humaine, questions / tours / temps par cas | §26 |
+| `completeness` | couverture des lacunes annotées, score de qualité initial → final | §12 |
+
+### Les choix qui font les chiffres
+
+Quatre décisions méthodologiques comptent plus que le code :
+
+**La précision est stricte.** Une lacune détectée qui n'apparie aucune annotation
+compte comme faux positif, même si c'est une vraie lacune que l'annotateur n'a
+pas écrite. La précision affichée est donc une **borne inférieure**, et
+`scores.md` liste intégralement ces prédictions non appariées : on les relit
+avant de croire un chiffre bas, plutôt que d'abaisser le seuil jusqu'à ce qu'il
+soit joli.
+
+**P / R / F1 par classe est strict, `found` ne l'est pas.** Une lacune appariée
+mais mal étiquetée est comptée comme manquée pour la classe annotée *et* comme
+faux positif pour la classe choisie — sinon la précision par classe mélangerait
+deux populations. La colonne `found` ignore l'étiquette et ne demande que « la
+lacune a-t-elle été remontée ? ». Le **blocking-gap recall**, métrique de sûreté
+du §8, est délibérément de ce second type : ne jamais mentionner une lacune
+bloquante est le danger, sous-estimer sa sévérité est un défaut plus doux, que la
+matrice de confusion rapporte à part.
+
+**Toutes les contradictions ne sont pas comparables.** `ground_truth.json`
+annote des contradictions **internes au CDC** (`statement_a` et `statement_b` en
+sont deux citations). Le critic, lui, détecte « cette nouvelle réponse contredit
+celle d'il y a trois tours » — une population dont le benchmark ne dit rien. Une
+trouvaille du critic peut donc *apparier* une annotation (elle compte comme vrai
+positif), mais une trouvaille non appariée n'est **pas** un faux positif : la
+compter ainsi afficherait une précision quasi nulle sur tout cas où la partie
+prenante synthétique se contredit, ce que le mode `realistic` provoque
+exprès. Ces trouvailles sont reportées sous `answer_level`. L'attribution se lit
+dans le journal de décisions (`gap_detected` = lecture du CDC, `contradiction_found`
+= critic, `final_check` = passe finale).
+
+**Le RAG a deux dénominateurs.** `recall_at_k` porte sur les récupérations
+réellement tentées : c'est le chiffre qui dit si l'index et les embeddings
+fonctionnent. `recall_at_k_overall` porte sur toutes les lacunes annotées
+`resolvable_by: "rag"`, une lacune jamais détectée comptant comme un échec :
+c'est ce que l'utilisateur constate, document non lu. Un extrait est pertinent
+quand son `chunk_id` commence par le document attendu (et contient `::p{page}::`
+si l'annotation fixe une page), d'où le format d'identifiant de
+`src/rag.py::_chunk_id`. Le bloc `sufficiency_judgment` tranche ensuite le §10 :
+l'extrait attendu est-il remonté puis accepté, remonté puis rejeté par le
+correcteur (**problème de raisonnement**), ou jamais remonté (**problème de
+récupération**) ?
+
+### Qualité des questions : déterministe d'abord
+
+Les six dimensions du §11 sont notées par heuristiques : recouvrement de mots-clés
+avec la lacune (`addresses_gap`), présence d'une citation ou d'un chiffre
+(`specific`), longueur et unicité du point d'interrogation (`understandable`),
+échos du texte du CDC (`has_context`), similarité de Jaccard avec les questions
+déjà posées (`not_duplicate`), et — lu directement dans le transcript — la partie
+prenante a-t-elle pu répondre (`answerable`). Rien de tout cela ne coûte un appel
+LLM, et deux notations du même run donnent le même chiffre.
+
+`--judge llm` ajoute un juge LLM sur la même grille, sous le `prompt_id`
+`judge.question_quality`. Il est rapporté **à côté** des heuristiques, sous
+`llm_judge`, jamais fondu dedans : le roadmap §23 sépare le jugement de l'IA de
+la validation déterministe, et un modèle qui note le système partageant son
+propre modèle n'est pas une preuve autonome. Une panne du juge coûte un verdict,
+pas la notation.
+
+`has_context` mérite une note : `ingest` n'étiquette que les morceaux qu'il sait
+rattacher à une section, si bien que le titre et le chapeau du CDC — souvent le
+texte le plus citable d'un CDC d'une page — n'en portent aucune. Le pool de
+comparaison inclut donc toujours ces morceaux non étiquetés, et retombe sur le
+CDC entier quand la section visée n'a rien à citer.
+
+### §12 : un proxy, et il est présenté comme tel
+
+Le roadmap §12 demande qu'un expert humain note le CDC initial et le CDC final
+sur huit dimensions. Le benchmark ne porte volontairement aucun document final
+de référence (note de la phase 2 : ce serait la prose d'un annotateur, pas une
+vérité terrain). Ce qui est calculé est donc un proxy déterministe :
+
+- `gt_gap_coverage` — le chiffre honnête de bout en bout : parmi les lacunes
+  qu'un humain a annotées, combien le système a-t-il à la fois **trouvées et
+  refermées** (par RAG, réponse, hypothèse ou déduplication) ?
+- `quality_score_initial` → `final` — `src/quality.py::score_section` appliqué
+  deux fois par section : une fois en comptant toutes les lacunes détectées comme
+  ouvertes, une fois en ne comptant que celles encore ouvertes à la fin. L'écart
+  mesure le poids de défauts retiré, pas le jugement d'un humain sur le document.
+
+### `scores.json` et la phase 6
+
+`scores.json` recopie l'identité du run (run_id, version du jeu de données,
+commit git, fournisseur / modèle, mode et graine du simulateur, `PROMPT_VERSIONS`)
+à côté de `scorer_version` et du seuil d'appariement. Deux fichiers se comparent
+donc sans retourner chercher leurs manifests — c'est le point d'accroche des
+rapports de régression de la phase 6. `scorer_version` se bump dès qu'un même run
+produirait des chiffres différents.

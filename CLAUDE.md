@@ -30,6 +30,8 @@ uv run python evals/run_evals.py                 # component evals (gap_finder /
 uv run python evals/run_benchmark.py             # full-graph benchmark, synthetic stakeholder
 uv run python evals/run_benchmark.py --cases cdc_003_ecommerce --cache   # one case, cached
 uv run python evals/run_benchmark.py --resume                            # continue the last run
+uv run python evals/run_scoring.py               # score the last run against ground truth
+uv run python evals/run_scoring.py --run <run_id> --judge llm            # + LLM question judge
 ```
 
 There is no linter/formatter configured. Match the surrounding style (`from __future__
@@ -108,17 +110,32 @@ which breaks the prepared-statement config.
 
 ### Evaluation
 
-Two harnesses in `evals/`, sharing `evals/harness.py`. `run_evals.py` calls single
-agents directly (fast prompt iteration). `run_benchmark.py` drives the **compiled
-graph** end to end over `evals/datasets/benchmark/` — ten annotated CDC cases with
-ground-truth gaps, contradictions and per-case reference documents — with a synthetic
-stakeholder (`evals/simulator.py`) answering each `interrupt()`. It emits predictions
-plus descriptive stats, never scores; precision/recall/F1 is roadmap Phase 4.
+Three harnesses in `evals/`. `run_evals.py` calls single agents directly (fast prompt
+iteration). `run_benchmark.py` drives the **compiled graph** end to end over
+`evals/datasets/benchmark/` — ten annotated CDC cases with ground-truth gaps,
+contradictions and per-case reference documents — with a synthetic stakeholder
+(`evals/simulator.py`) answering each `interrupt()`; it emits predictions and
+descriptive stats, never scores. `run_scoring.py` does the scoring, as a **separate
+pass over a finished run directory**: it is offline and takes seconds, so an improved
+scorer can be replayed over a run that already cost two hours. The first two share
+`evals/harness.py`.
 
-Two things to respect when touching it: a `resolvable_by: "rag"` ground-truth gap must
-not also carry an `expected_answer` (the oracle would mask a retrieval failure), and
-each case runs under `harness.isolate(...)` so its RAG corpus, Chroma index and output
-dir stay private. Full reference: `docs/07-evaluation.md`.
+Two things to respect when touching the dataset: a `resolvable_by: "rag"` ground-truth
+gap must not also carry an `expected_answer` (the oracle would mask a retrieval
+failure), and each case runs under `harness.isolate(...)` so its RAG corpus, Chroma
+index and output dir stay private. Full reference: `docs/07-evaluation.md`.
+
+**Scoring** (`evals/scoring.py` = pure functions, `run_scoring.py` = CLI/report/IO).
+Predicted↔annotated matching is by *content* — runtime gap ids are content hashes —
+reusing `keyword_score` from `simulator.py` so the scorer and the oracle can't drift.
+Four invariants worth keeping: the scorer never writes to what it reads; precision is
+strict (an unannotated detection is a false positive) so `unmatched_predictions` is
+always printed for review; the critic's answer-vs-answer contradictions can raise
+recall but are never false positives, because ground truth only annotates
+CDC-internal ones; and `predictions.json` carries `decision_log` because RAG rank
+order lives nowhere else (a *rejected* retrieval leaves no `ContextItem`, only a
+`rag_rejected` entry with `evidence_ids`). Question quality is deterministic by
+default; `--judge llm` adds an LLM rubric beside it, never merged into it.
 
 **The benchmark is resumable, so nothing is buffered until the end.** Every artifact
 goes through `write_atomic` and is written as it happens — the graph checkpoint after

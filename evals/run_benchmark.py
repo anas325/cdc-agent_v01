@@ -551,6 +551,12 @@ def run_case(case: BenchmarkCase, *, simulator, loop_settings: LoopSettings,
         "gaps": [g.model_dump() for g in values.get("gaps", [])],
         "context_items": [c.model_dump() for c in values.get("context_items", [])],
         "asked_questions": [q.model_dump() for q in values.get("asked_questions", [])],
+        # The scorer's only source of retrieval rank order: which chunks came back
+        # for a gap, in which order, lives in the rag_answer/rag_rejected entries'
+        # evidence_ids and nowhere else (a rejected retrieval leaves no ContextItem
+        # at all). The final validator's cross-section contradictions are likewise
+        # only in its final_check entry's details.
+        "decision_log": [d.model_dump() for d in values.get("decision_log", [])],
         "section_statuses": {
             sid: ss.model_dump() for sid, ss in (values.get("section_statuses") or {}).items()
         },
@@ -697,9 +703,13 @@ def render_report(manifest: dict, rows: list[dict]) -> str:
         "",
         "---",
         "",
-        "Descriptive only — no ground-truth comparison. Precision/recall/F1, blocking-gap",
-        "recall, RAG Recall@K and question-quality scoring are roadmap Phase 4 and consume",
-        "`predictions.json` + `ground_truth.json`.",
+        "Descriptive only — nothing here is compared to ground truth. For precision/recall/F1,",
+        "blocking-gap recall, RAG Recall@K and question quality, score the run:",
+        "",
+        f"    uv run python evals/run_scoring.py --run {manifest['run_id']}",
+        "",
+        "which reads these `predictions.json` files against `ground_truth.json` and writes",
+        "`scores.md` beside this file.",
         "",
     ]
     return "\n".join(lines)
@@ -747,6 +757,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-turns", type=int, help="override loop.max_turns")
     p.add_argument("--max-questions-per-batch", type=int, help="override loop.max_questions_per_batch")
     p.add_argument("--cache", action="store_true", help="enable the LLM disk cache for this run")
+    p.add_argument("--score", action="store_true",
+                   help="score the run against ground truth once it finishes "
+                        "(same as running evals/run_scoring.py afterwards)")
     p.add_argument("--out", type=Path, help=f"results root (default: {RESULTS_DIR})")
 
     naming = p.add_mutually_exclusive_group()
@@ -969,6 +982,14 @@ def main(argv: list[str] | None = None) -> int:
 
     flush()
     print(f"\nwrote {results_root}")
+
+    # Scoring is a separate, re-runnable pass by design (evals/run_scoring.py);
+    # this is only the convenience of not having to type the second command. An
+    # interrupted run is scored on the next --resume, not on a partial batch.
+    if args.score and not interrupted:
+        from evals import run_scoring
+
+        run_scoring.main(["--run", run_id, "--out", str(results_dir)])
 
     if interrupted:
         print(

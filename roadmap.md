@@ -1350,7 +1350,7 @@ Result:
 
 > You have something measurable.
 
-**Done.** Ten annotated cases in `evals/datasets/benchmark/` (125 ground-truth
+**Done.** Ten annotated cases in `evals/datasets/benchmark/` (115 ground-truth
 gaps, 20 contradictions, 38 of them RAG-resolvable with a cited document), each
 with `initial_cdc.md`, a private `source_docs/`, `ground_truth.json` and
 `stakeholder.yaml`. Schema and validating loader in `evals/dataset.py` — an
@@ -1399,19 +1399,69 @@ Chroma index and output directory comes from `evals/harness.py::isolate` on top 
 Implement:
 
 ```text
-[ ] Gap precision / recall / F1
-[ ] Blocking-gap recall
-[ ] Contradiction precision / recall / F1
-[ ] RAG Recall@K
-[ ] MRR
-[ ] Question quality score
-[ ] Human intervention reduction
-[ ] End-to-end completeness improvement
+[x] Gap precision / recall / F1
+[x] Blocking-gap recall
+[x] Contradiction precision / recall / F1
+[x] RAG Recall@K
+[x] MRR
+[x] Question quality score
+[x] Human intervention reduction
+[x] End-to-end completeness improvement
 ```
 
 Result:
 
 > The system becomes scientifically evaluated.
+
+**Done.** `evals/scoring.py` holds the arithmetic as pure functions over a
+`predictions.json` record plus its `GroundTruth`; `evals/run_scoring.py` is the
+CLI, writing `scores.json` / `scores.csv` / `scores.md` into a finished run
+directory. Scoring is a **separate pass** — offline, seconds, idempotent, and it
+never writes to what it reads — so a sharper scorer can be replayed over a
+two-hour run instead of re-running it. `run_benchmark.py --score` chains the two
+for convenience only.
+
+Predicted↔annotated matching is by *content*, since runtime gap ids are content
+hashes: an annotation's `keywords` against the detected gap's description,
+category, sections and question, threshold 0.5, reusing `keyword_score` from
+`evals/simulator.py` so the scorer and the oracle cannot drift apart. Assignment
+is one-to-one and deterministic.
+
+Four judgment calls decide what the numbers mean, and all four are stated in the
+report itself rather than buried:
+
+- **Precision is strict** (§7): a detected gap matching no annotation is a false
+  positive even when it is real, so the figure is a lower bound and every
+  unmatched prediction is printed for review.
+- **Per-class P/R/F1 is strict multi-class**, but `found` (detection recall,
+  label ignored) sits beside it — and §8's blocking-gap recall is deliberately
+  the second kind: never surfacing a blocking gap is the danger, under-calling
+  its severity is a milder failure the confusion matrix reports separately.
+- **Contradictions are two populations.** Ground truth annotates contradictions
+  *inside the CDC*; the critic's "this answer contradicts that one" is something
+  the benchmark says nothing about. Those can match an annotation (raising
+  recall) but are never charged as false positives — otherwise `--mode realistic`,
+  which exists to provoke them, would report near-zero precision by design.
+- **RAG has two denominators** (§10): Recall@K over retrievals actually
+  attempted (is the index working?) and over every annotated RAG gap (an
+  undetected gap means the document went unread). `sufficiency_judgment` then
+  splits a retrieval problem from a reasoning problem — evidence that came back
+  and was thrown away by the grader is a different bug from evidence that never
+  came back. This needed one change upstream: `predictions.json` now carries the
+  decision log, because a *rejected* retrieval leaves no `ContextItem` and its
+  ranked `evidence_ids` survive nowhere else.
+
+Question quality (§11) is scored deterministically on the six dimensions — free,
+reproducible, no network — with `--judge llm` adding an LLM rubric under
+`judge.question_quality` *beside* the heuristics, never merged into them (§23).
+
+§12 is honest about being a proxy: the benchmark deliberately carries no
+expert-scored reference final document (Phase 2's note), so what is measured is
+`gt_gap_coverage` — of the gaps a human annotated, how many were both found and
+closed — plus a `src/quality.py::score_section` delta between "every detected gap
+outstanding" and "only the gaps still open". `scores.json` copies the run's
+identity beside `scorer_version`, which is what Phase 6's regression reports will
+diff. See `docs/07-evaluation.md`.
 
 ---
 

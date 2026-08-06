@@ -112,6 +112,7 @@ src/
   llm.py                       # get_llm() factory + call_structured()
   rag.py                       # Chroma ingestion + retrieval
   db.py                        # Supabase Postgres: checkpointer + per-user runs index
+  quality.py                   # per-section quality score, shared by the UI and the scorer
   graph.py                     # StateGraph wiring — the orchestration backbone
   app.py                       # Streamlit UI, the actual entrypoint (auth + run history)
   agents/
@@ -124,6 +125,8 @@ src/
 evals/                         # offline evaluation — see docs/07-evaluation.md
   run_evals.py                 # component evals: calls gap_finder/critic directly, no graph
   run_benchmark.py             # batch runner: drives the compiled graph over the benchmark
+  run_scoring.py               # scores a finished run against ground truth (CLI + report)
+  scoring.py                   # the metrics themselves — pure functions, no I/O, no LLM
   simulator.py                 # synthetic stakeholders answering the interrupt() batches
   dataset.py                   # benchmark schema + validating loader
   harness.py                   # provider forcing, per-case settings isolation, run manifest
