@@ -36,6 +36,8 @@ class LLMCall:
     started_at: float
     error: str | None = None
     cache_hit: bool = False
+    prompt_id: str | None = None
+    prompt_version: str | None = None
 
 
 @dataclass
@@ -146,11 +148,15 @@ def record_llm(
     started_at: float,
     error: str | None = None,
     cache_hit: bool = False,
+    prompt_id: str | None = None,
+    prompt_version: str | None = None,
 ) -> None:
     call = LLMCall(
         node=current_node_name(),
         schema=schema,
         model=model,
+        prompt_id=prompt_id,
+        prompt_version=prompt_version,
         duration_s=duration_s,
         attempts=attempts,
         ok=ok,

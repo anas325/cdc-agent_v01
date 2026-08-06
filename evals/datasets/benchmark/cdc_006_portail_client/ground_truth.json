@@ -1,0 +1,196 @@
+{
+  "case_id": "cdc_006_portail_client",
+  "title": "Portail client distributeurs",
+  "dataset_version": "v1",
+  "annotator": "équipe CDC (relecture experte)",
+  "notes": "Cas sécurité / contrôle d'accès. Le CDC dit « le portail est sécurisé » et « les mots de passe sont chiffrés » — deux affirmations que la politique RSSI contredit ou remplace (SSO fédéré, aucun mot de passe géré en propre). Un système qui accepte ces phrases telles quelles au lieu de les instruire passe à côté du risque principal du projet.",
+  "gaps": [
+    {
+      "id": "GT-GAP-001",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "blocking",
+      "description": "« Le portail est sécurisé » et « les mots de passe sont chiffrés » : aucun mode d'authentification défini pour des utilisateurs externes.",
+      "keywords": ["authentification", "mot de passe"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "politique_acces_rssi.md",
+        "quote": "**Keycloak partenaires**"
+      }
+    },
+    {
+      "id": "GT-GAP-002",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "« Chaque distributeur voit ses propres données » sans modèle de rôles ni règle de cloisonnement vérifiable.",
+      "keywords": ["role", "cloisonnement", "habilitation"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "politique_acces_rssi.md",
+        "quote": "le cloisonnement par entité est vérifié côté serveur"
+      }
+    },
+    {
+      "id": "GT-GAP-003",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "important",
+      "description": "F5 confie la gestion des comptes à l'administration des ventes sans dire si un distributeur peut gérer ses propres utilisateurs.",
+      "keywords": ["compte", "gestion", "administration"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "politique_acces_rssi.md",
+        "quote": "la gestion des comptes partenaires est déléguée au"
+      }
+    },
+    {
+      "id": "GT-GAP-004",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "blocking",
+      "description": "Le téléchargement de factures et de bons de livraison n'a aucune exigence de protection des documents.",
+      "keywords": ["document", "telechargement", "url"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "politique_acces_rssi.md",
+        "quote": "URL signées"
+      }
+    },
+    {
+      "id": "GT-GAP-005",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "important",
+      "description": "Aucune exigence de traçabilité, alors que le portail engage des commandes et expose des documents comptables.",
+      "keywords": ["tracabilite", "journal", "audit"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "politique_acces_rssi.md",
+        "quote": "Sont journalisés et conservés **13 mois**"
+      }
+    },
+    {
+      "id": "GT-GAP-006",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "blocking",
+      "description": "« Le portail doit supporter la charge » : ni utilisateurs simultanés, ni temps de réponse, ni disponibilité.",
+      "keywords": ["charge", "simultanes", "disponibilite"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "politique_acces_rssi.md",
+        "quote": "pic à 300 en fin de mois"
+      }
+    },
+    {
+      "id": "GT-GAP-007",
+      "section_id": "technical",
+      "category": "data_model",
+      "severity": "important",
+      "description": "Le distributeur est modélisé par un code et un nom : ni utilisateurs rattachés, ni contacts, ni cycle de vie du compte.",
+      "keywords": ["distributeur", "compte", "modele"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "politique_acces_rssi.md",
+        "quote": "compte partenaire inactif depuis 18 mois est désactivé"
+      }
+    },
+    {
+      "id": "GT-GAP-008",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "« Un distributeur bloqué pour impayé ne peut plus commander » : ni définition du blocage, ni origine de l'information, ni traitement des commandes en cours.",
+      "keywords": ["impaye", "blocage"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-009",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "Le passage de commande n'a aucune règle métier : minimum de commande, tarif applicable, disponibilité produit, validation avant transmission à l'ERP.",
+      "keywords": ["commande", "tarif", "minimum"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-010",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "blocking",
+      "description": "« Le portail échange avec l'ERP » : ni sens des flux, ni synchrone/asynchrone, ni comportement si l'ERP est indisponible.",
+      "keywords": ["erp", "echange", "indisponible"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-011",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "important",
+      "description": "Aucun comportement défini si une commande est rejetée par l'ERP après transmission.",
+      "keywords": ["rejet", "commande", "erp"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-012",
+      "section_id": "functional",
+      "category": "acceptance_criteria",
+      "severity": "important",
+      "description": "Aucun critère d'acceptation, notamment sur la suppression de la ressaisie manuelle.",
+      "keywords": ["critere", "acceptation"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-013",
+      "section_id": "constraints",
+      "category": "scope",
+      "severity": "important",
+      "description": "« Ouverture aux 40 premiers distributeurs » : ni critère de sélection, ni calendrier pour les 360 autres.",
+      "keywords": ["40", "distributeurs", "ouverture"],
+      "resolvable_by": "human"
+    }
+  ],
+  "contradictions": [
+    {
+      "id": "GT-CON-001",
+      "statement_a": "Les mots de passe sont chiffrés (le portail gère donc des mots de passe)",
+      "statement_b": "Politique RSSI : aucune application ne gère de mot de passe en propre, authentification fédérée obligatoire",
+      "section_ids": ["technical"],
+      "severity": "blocking",
+      "keywords": ["mot de passe", "federation"]
+    }
+  ],
+  "expected_answers": [
+    {
+      "gap_ref": "GT-GAP-008",
+      "answer": "Le blocage vient de la comptabilité : un distributeur est bloqué dès qu'une facture dépasse 30 jours de retard. Le blocage empêche toute nouvelle commande mais laisse passer celles déjà transmises à l'ERP, et n'empêche jamais la consultation des documents.",
+      "keywords": ["impaye", "30 jours"]
+    },
+    {
+      "gap_ref": "GT-GAP-009",
+      "answer": "Le tarif appliqué est celui du contrat du distributeur, remonté par l'ERP. Le minimum de commande est de 500 € HT. Un produit indisponible reste commandable avec une date de disponibilité affichée. Aucune validation interne n'est requise sous 20 000 € HT.",
+      "keywords": ["tarif", "minimum"]
+    },
+    {
+      "gap_ref": "GT-GAP-010",
+      "answer": "L'ERP reste la source de vérité : le portail lit le catalogue, les encours et les documents, et lui pousse les commandes. Si l'ERP est indisponible, la commande est mise en file et retransmise automatiquement, avec un message indiquant au distributeur qu'elle est en cours de transmission.",
+      "keywords": ["erp", "source de verite"]
+    },
+    {
+      "gap_ref": "GT-GAP-011",
+      "answer": "Une commande rejetée par l'ERP repasse en brouillon côté portail avec le motif de rejet, et l'administration des ventes reçoit une notification.",
+      "keywords": ["rejet", "brouillon"]
+    },
+    {
+      "gap_ref": "GT-GAP-012",
+      "answer": "Le projet est accepté si 80 % des commandes des distributeurs pilotes passent par le portail sans ressaisie manuelle sur un mois complet.",
+      "keywords": ["ressaisie", "80"]
+    },
+    {
+      "gap_ref": "GT-GAP-013",
+      "answer": "Les 40 pilotes sont les distributeurs représentant le plus gros volume de commandes ; les autres sont ouverts par vagues de 80 tous les deux mois l'année suivante.",
+      "keywords": ["pilotes", "vagues"]
+    }
+  ]
+}

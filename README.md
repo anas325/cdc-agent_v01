@@ -73,6 +73,57 @@ Off by default, so normal runs are never served stale output. To invalidate,
 delete the directory (`rm -rf .cache/llm`) — editing a prompt, switching model
 or changing `config/sections.yaml` already changes the key on its own.
 
+## Evaluate
+
+```
+uv run pytest                                    # test suite
+uv run python evals/run_evals.py                 # component evals (gap_finder, critic)
+uv run python evals/run_benchmark.py             # full-graph benchmark, no human needed
+uv run python evals/run_scoring.py               # score the last run against ground truth
+```
+
+`run_benchmark.py` replays ten annotated CDC cases through the real graph, with a
+synthetic stakeholder answering every question batch — including "je ne sais pas"
+and, in `--mode realistic`, contradictory answers. Each run writes predictions, a
+transcript of the simulated interaction, per-case artifacts and a reproducibility
+manifest under `evals/results/<run_id>/`. Start with one case:
+
+```
+uv run python evals/run_benchmark.py --cases cdc_003_ecommerce --cache
+```
+
+A run narrates itself on stderr as it goes — one line per graph node with the
+counters that move (gaps found, gaps still open, questions asked, sections
+complete), plus each simulated question and answer — so you can watch the loop
+close gaps instead of waiting minutes for one summary line. `2>/dev/null` leaves
+just the per-case result; `--quiet` turns the trace off entirely.
+
+A full run is ten cases of several minutes, so it is written to disk as it goes —
+the graph checkpoint after every node, the transcript after every question round,
+`summary.csv` and `report.md` after every case — and can be picked back up:
+
+```
+uv run python evals/run_benchmark.py --resume    # skips finished cases, and the
+                                                 # unfinished one continues from
+                                                 # its last completed graph turn
+```
+
+`run_scoring.py` then turns those predictions into scores: gap and contradiction
+precision / recall / F1 by category, a severity confusion matrix and blocking-gap
+recall, RAG Recall@K and MRR, six-dimension question quality, and human
+intervention reduction — written as `scores.json`, `scores.csv` and a readable
+`scores.md` beside the run.
+
+```
+uv run python evals/run_scoring.py --run bench_20260805_130607
+uv run python evals/run_benchmark.py --cases cdc_003_ecommerce --cache --score
+```
+
+Scoring is a separate pass on purpose: it is offline and takes seconds, so an
+improved scorer can be replayed over a run that already cost two hours.
+
+See [`docs/07-evaluation.md`](docs/07-evaluation.md).
+
 ## Project structure
 
 ```
@@ -83,6 +134,7 @@ src/
   graph.py         # LangGraph orchestration
   agents/          # orchestrator, gap_finder, gap_filler, critic, synthesizer, final_validator
   app.py           # Streamlit UI (entrypoint)
+evals/             # benchmark dataset, synthetic stakeholder, batch runner, scorer
 output/            # generated cdc_final.qmd / .docx / qa_report.md
 docs/              # architecture documentation
 ```

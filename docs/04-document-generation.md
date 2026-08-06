@@ -79,10 +79,13 @@ generated from the config).
 Runs immediately after synthesis, before the graph reaches `END`.
 
 - **`find_unmapped_context(state, mapped)`** — pure set-difference: any
-  `ContextItem` whose id doesn't appear in any section's mapped-id list. This
-  can happen if an item's `section_ids` referenced a section id that's no
+  *live* `ContextItem` whose id doesn't appear in any section's mapped-id list.
+  This can happen if an item's `section_ids` referenced a section id that's no
   longer in `sections_config`, or more commonly, was never assigned to a
-  concrete section at all.
+  concrete section at all. Superseded items are excluded: they were
+  deliberately retired (see
+  [integrate_answers](02-graph-and-agents.md#integrate_answers)) and get their
+  own report section, so listing them here would read as a synthesis failure.
 - **`find_final_contradictions(qmd_text)`** — one more LLM call, this time
   reading the *entire assembled document* at once, looking for
   inconsistencies invisible when each section was drafted independently
@@ -93,8 +96,8 @@ Runs immediately after synthesis, before the graph reaches `END`.
   context against existing context — it never re-reads the final rendered
   prose as a whole.
 - **`write_qa_report(state, unmapped, final_contradictions)`** — writes
-  `output/qa_report.md` with five sections, each pulled from `state["gaps"]`
-  by status plus the two lists above:
+  `output/qa_report.md`, each section pulled from `state["gaps"]` by status,
+  from the context items' provenance, or from the two lists above:
 
   ```markdown
   # Rapport QA — Cahier des charges
@@ -102,6 +105,8 @@ Runs immediately after synthesis, before the graph reaches `END`.
   ## Lacunes résolues (N)
   ## Hypothèses retenues faute de réponse (N)
   ## Lacunes reportées (limite de tours atteinte) (N)
+  ## Traçabilité des informations produites par le système (N)
+  ## Hypothèses écartées par une réponse ultérieure (N)
   ## Éléments de contexte non intégrés au document (N)
   ## Incohérences détectées lors de la relecture finale (N)
   ## Motif d'arrêt          <- only if state.stop_reason is set
@@ -109,7 +114,9 @@ Runs immediately after synthesis, before the graph reaches `END`.
 
   "Résolues" covers gap statuses `resolved`, `rag_answered`, and
   `user_answered` together — the report doesn't distinguish how a gap was
-  closed, only that it was.
+  closed, only that it was. "Hypothèses écartées" is the counterpart to
+  superseding: an assumption that a later user answer overruled is gone from
+  the document but named here, alongside what replaced it.
 
 Finally, `final_validator_node` (in `graph.py`) sets `done=True`, which is
 what routes the graph to `END` and flips the Streamlit UI into its

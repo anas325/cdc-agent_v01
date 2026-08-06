@@ -1,0 +1,201 @@
+{
+  "case_id": "cdc_005_iot_maintenance",
+  "title": "Maintenance prédictive des lignes de conditionnement",
+  "dataset_version": "v1",
+  "annotator": "équipe CDC (relecture experte)",
+  "notes": "Second cas RAG, sur un contrat d'interface plutôt que sur des règles métier : volumétrie, latence, quotas, format des messages et détection de capteur muet sont tous chiffrés dans l'annexe. Les lacunes purement métier (seuil d'alerte, astreinte, définition d'une anomalie) n'y figurent pas et doivent partir en question — c'est la séparation « problème de récupération » / « problème de raisonnement » du roadmap §10.",
+  "gaps": [
+    {
+      "id": "GT-GAP-001",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "blocking",
+      "description": "« Le système consomme l'API de la plateforme industrielle » sans protocole, authentification, ni quota d'appel.",
+      "keywords": ["api", "authentification", "plateforme"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "contrat_api_plateforme_industrielle.md",
+        "quote": "OAuth2 client credentials, jeton valable 60 minutes"
+      }
+    },
+    {
+      "id": "GT-GAP-002",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "blocking",
+      "description": "L'écriture vers la GMAO n'a ni format de message, ni mode d'échange, ni gestion de l'acquittement.",
+      "keywords": ["gmao", "intervention"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "contrat_api_plateforme_industrielle.md",
+        "quote": "Toute demande d'intervention passe par"
+      }
+    },
+    {
+      "id": "GT-GAP-003",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "blocking",
+      "description": "Aucune volumétrie : nombre de capteurs, fréquence d'émission, volume de mesures par jour.",
+      "keywords": ["volumetrie", "capteur", "mesures"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "contrat_api_plateforme_industrielle.md",
+        "quote": "~480 capteurs"
+      }
+    },
+    {
+      "id": "GT-GAP-004",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "important",
+      "description": "« Le système doit traiter les mesures rapidement » et « le tableau de bord doit être réactif » : aucune latence cible.",
+      "keywords": ["rapidement", "latence", "reactif"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "contrat_api_plateforme_industrielle.md",
+        "quote": "moins de 800 ms au 95e centile"
+      }
+    },
+    {
+      "id": "GT-GAP-005",
+      "section_id": "technical",
+      "category": "data_model",
+      "severity": "important",
+      "description": "La mesure est modélisée en trois champs : ni ligne, ni type de capteur, ni indicateur de qualité, ni durée de rétention.",
+      "keywords": ["mesure", "qualite", "retention"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "contrat_api_plateforme_industrielle.md",
+        "quote": "Rétention côté plateforme : **90 jours**"
+      }
+    },
+    {
+      "id": "GT-GAP-006",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "important",
+      "description": "« Si un capteur ne répond plus, le système le signale » : le seuil au-delà duquel un capteur est muet n'est pas défini.",
+      "keywords": ["capteur", "muet", "repond plus"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "contrat_api_plateforme_industrielle.md",
+        "quote": "muet** par la plateforme après **3 cycles"
+      }
+    },
+    {
+      "id": "GT-GAP-007",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "blocking",
+      "description": "Rien ne dit ce qui se passe pendant une coupure du flux ni comment l'historique manquant est rattrapé.",
+      "keywords": ["coupure", "flux", "rattrapage"],
+      "resolvable_by": "rag",
+      "expected_evidence": {
+        "document": "contrat_api_plateforme_industrielle.md",
+        "quote": "en cas de coupure, rattraper par"
+      }
+    },
+    {
+      "id": "GT-GAP-008",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "« Un comportement anormal » n'est pas défini : ni indicateur, ni seuil, ni durée d'observation avant alerte.",
+      "keywords": ["anomalie", "seuil"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-009",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "Le cycle de vie d'une alerte est réduit à « consulter / traiter / clôturer » : ni criticité, ni délai de prise en charge, ni escalade.",
+      "keywords": ["alerte", "escalade", "criticite"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-010",
+      "section_id": "functional",
+      "category": "functional_ambiguity",
+      "severity": "important",
+      "description": "« Mis à jour en temps réel » n'est pas quantifié pour le tableau de bord, et son contenu par ligne n'est pas décrit.",
+      "keywords": ["temps reel", "tableau de bord"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-011",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "important",
+      "description": "« Les accès sont contrôlés » : aucun rôle, aucune règle d'habilitation entre maintenance, production et direction.",
+      "keywords": ["acces", "role"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-012",
+      "section_id": "functional",
+      "category": "acceptance_criteria",
+      "severity": "important",
+      "description": "Aucun critère d'acceptation, notamment sur la qualité de détection attendue (faux positifs tolérés).",
+      "keywords": ["critere", "faux positif"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-013",
+      "section_id": "constraints",
+      "category": "scope",
+      "severity": "important",
+      "description": "« Généralisation ensuite » : ni critère de passage du pilote à la généralisation, ni date.",
+      "keywords": ["pilote", "generalisation"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-014",
+      "section_id": "problem",
+      "category": "functional_ambiguity",
+      "severity": "nice_to_have",
+      "description": "L'objectif de réduction des arrêts non planifiés n'a pas de cible chiffrée à partir des 6 % actuels.",
+      "keywords": ["arret", "cible"],
+      "resolvable_by": "human"
+    }
+  ],
+  "contradictions": [],
+  "expected_answers": [
+    {
+      "gap_ref": "GT-GAP-008",
+      "answer": "Une anomalie est une dérive de la vibration ou de la température au-delà de deux écarts-types de la référence de la ligne, maintenue plus de cinq minutes consécutives. Une mesure de qualité dégradée n'entre pas dans le calcul.",
+      "keywords": ["anomalie", "vibration"]
+    },
+    {
+      "gap_ref": "GT-GAP-009",
+      "answer": "Une alerte est haute, moyenne ou basse. Une alerte haute doit être prise en charge en moins de 30 minutes en heures de production, sinon elle est escaladée au responsable de production. Une alerte non traitée sous 24h est escaladée à la direction industrielle.",
+      "keywords": ["alerte", "escalade"]
+    },
+    {
+      "gap_ref": "GT-GAP-010",
+      "answer": "Le tableau de bord se rafraîchit au maximum toutes les 30 secondes et affiche par ligne l'état courant, les alertes ouvertes et le nombre d'arrêts du mois.",
+      "keywords": ["tableau de bord", "30 secondes"]
+    },
+    {
+      "gap_ref": "GT-GAP-011",
+      "answer": "L'équipe maintenance traite les alertes, la production les consulte en lecture, la direction industrielle n'accède qu'aux indicateurs agrégés. L'IT industrielle administre les paramètres de détection.",
+      "keywords": ["maintenance", "lecture"]
+    },
+    {
+      "gap_ref": "GT-GAP-012",
+      "answer": "Le pilote est validé si au moins 70 % des arrêts non planifiés ont été précédés d'une alerte, avec au plus deux fausses alertes par ligne et par semaine.",
+      "keywords": ["pilote", "fausses alertes"]
+    },
+    {
+      "gap_ref": "GT-GAP-013",
+      "answer": "La généralisation est décidée après trois mois de pilote, si les critères de détection sont tenus sur les deux lignes ; le déploiement se fait ensuite par lots de trois lignes.",
+      "keywords": ["generalisation", "pilote"]
+    },
+    {
+      "gap_ref": "GT-GAP-014",
+      "answer": "La cible est de passer de 6 % à 4 % d'arrêts non planifiés sur douze mois après la généralisation.",
+      "keywords": ["arret", "6"]
+    }
+  ]
+}

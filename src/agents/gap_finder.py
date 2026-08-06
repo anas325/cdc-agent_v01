@@ -11,10 +11,17 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from src.context_utils import format_all_sections_context, format_open_gaps, get_section
+from src.context_utils import (
+    coerce_section_ids,
+    format_all_sections_context,
+    format_open_gaps,
+    get_section,
+    sections_of_items,
+)
+from src.decisions import clamp_confidence, make_decision
 from src.ids import stable_id
-from src.llm import call_structured
-from src.state import CDCState, Gap, GapCategory, GapSeverity
+from src.llm import call_structured, current_model_name
+from src.state import CDCState, DecisionLogEntry, Gap, GapCategory, GapSeverity
 
 GAP_TAXONOMY = [
     "functional_ambiguity",
@@ -35,18 +42,21 @@ class GapCandidate(BaseModel):
     description: str
     severity: GapSeverity
     follow_up_of_gap_id: str | None = None
+    # Optionnel et toléré absent : les petits modèles l'omettent souvent.
+    confidence: float | None = None
 
 
 class GapFinderOutput(BaseModel):
     new_gaps: list[GapCandidate] = Field(default_factory=list)
     resolved_gap_ids: list[str] = Field(default_factory=list)
-    
+
 
 
 class GapFinderResult(BaseModel):
     new_gaps: list[Gap]
     resolved_gap_ids: list[str]
     section_complete: bool | None
+    decisions: list[DecisionLogEntry] = Field(default_factory=list)
 
 def compute_section_complete(
     state: CDCState,
@@ -153,21 +163,42 @@ def run_gap_finder(
     if mode == "section":
         assert section_id is not None
         prompt = _build_prompt_section_mode(state, section_id)
+        prompt_id = "gap_finder.section"
     else:
         assert fresh_item_ids
         prompt = _build_prompt_fresh_mode(state, fresh_item_ids)
+        prompt_id = "gap_finder.fresh"
 
-    output = call_structured(prompt, GapFinderOutput)
+    output = call_structured(prompt, GapFinderOutput, prompt_id=prompt_id)
 
     new_gaps: list[Gap] = []
+    decisions: list[DecisionLogEntry] = []
+    # Le mode "fresh" n'a pas de section courante : on retombe sur les sections
+    # des éléments évalués plutôt que de laisser passer des ids inventés.
+    default_sections = [section_id] if section_id else sections_of_items(state, fresh_item_ids or [])
     for cand in output.new_gaps:
-        new_gaps.append(
-            Gap(
-                id=stable_id("gap", section_id or "", cand.category, cand.description),
-                section_ids=cand.section_ids or ([section_id] if section_id else []),
-                category=cand.category,
-                description=cand.description,
-                severity=cand.severity,
+        gap = Gap(
+            id=stable_id("gap", section_id or "", cand.category, cand.description),
+            section_ids=coerce_section_ids(state, cand.section_ids, fallback=default_sections),
+            category=cand.category,
+            description=cand.description,
+            severity=cand.severity,
+        )
+        new_gaps.append(gap)
+        decisions.append(
+            make_decision(
+                state,
+                agent="gap_finder",
+                decision_type="gap_detected",
+                summary=f"[{gap.severity}/{gap.category}] {gap.description}",
+                prompt_id=prompt_id,
+                input_ids=fresh_item_ids or ([section_id] if section_id else []),
+                output_ids=[gap.id],
+                confidence=clamp_confidence(cand.confidence),
+                model=current_model_name(),
+                mode=mode,
+                section_ids=gap.section_ids,
+                follow_up_of_gap_id=cand.follow_up_of_gap_id,
             )
         )
     section_complete = None
@@ -184,4 +215,5 @@ def run_gap_finder(
         new_gaps=new_gaps,
         resolved_gap_ids=output.resolved_gap_ids,
         section_complete=section_complete if mode == "section" else None,
+        decisions=decisions,
     )

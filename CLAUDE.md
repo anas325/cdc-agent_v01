@@ -11,7 +11,7 @@ author targeted questions otherwise, checks new info for contradictions, and fin
 synthesizes a DOCX (via Quarto) plus a QA report. The UI language is French. The only
 interface is a Streamlit app — there is no CLI (`main.py` is an unused `uv` stub).
 
-Full architecture docs live in `docs/00-overview.md` through `docs/06-configuration.md`.
+Full architecture docs live in `docs/00-overview.md` through `docs/07-evaluation.md`.
 `prompt.md` at the repo root is the original build spec and a useful intent reference.
 
 ## Commands
@@ -25,6 +25,13 @@ uv run pytest                        # run the full test suite
 uv run pytest tests/test_routing.py::test_name   # single test
 uv run python scripts/hash_password.py           # bcrypt-hash a password for secrets.toml
 uv run langgraph dev                 # LangGraph dev server (graph exposed via langgraph.json)
+
+uv run python evals/run_evals.py                 # component evals (gap_finder / critic, no graph)
+uv run python evals/run_benchmark.py             # full-graph benchmark, synthetic stakeholder
+uv run python evals/run_benchmark.py --cases cdc_003_ecommerce --cache   # one case, cached
+uv run python evals/run_benchmark.py --resume                            # continue the last run
+uv run python evals/run_scoring.py               # score the last run against ground truth
+uv run python evals/run_scoring.py --run <run_id> --judge llm            # + LLM question judge
 ```
 
 There is no linter/formatter configured. Match the surrounding style (`from __future__
@@ -57,6 +64,13 @@ when editing:
 - **Nothing is silently dropped.** User-doesn't-know → an `assumption` ContextItem,
   flagged in the final doc. Context mapped to no section, and contradictions found on a
   final read, land in `output/qa_report.md`.
+- **Every decision is auditable.** Each `ContextItem` carries its provenance
+  (`created_by`, `evidence` chunks with document/page, `confidence`,
+  `validation_status`, `model`, `prompt_version`); each meaningful agent decision
+  appends a `DecisionLogEntry` to `state["decision_log"]` (checkpointed, dumped to
+  `output/decision_log.jsonl`). Agents build these and return them — only `graph.py`
+  writes them into state. Every `call_structured` passes a `prompt_id` registered in
+  `src/prompts.py`; **bump its version there when you edit a prompt's wording.**
 
 ### Graph flow
 
@@ -94,11 +108,54 @@ re-reads it on every rerun rather than trusting in-memory globals. **Use the Sup
 SESSION pooler (port 5432) or a direct connection — NOT the transaction pooler (6543)**,
 which breaks the prepared-statement config.
 
+### Evaluation
+
+Three harnesses in `evals/`. `run_evals.py` calls single agents directly (fast prompt
+iteration). `run_benchmark.py` drives the **compiled graph** end to end over
+`evals/datasets/benchmark/` — ten annotated CDC cases with ground-truth gaps,
+contradictions and per-case reference documents — with a synthetic stakeholder
+(`evals/simulator.py`) answering each `interrupt()`; it emits predictions and
+descriptive stats, never scores. `run_scoring.py` does the scoring, as a **separate
+pass over a finished run directory**: it is offline and takes seconds, so an improved
+scorer can be replayed over a run that already cost two hours. The first two share
+`evals/harness.py`.
+
+Two things to respect when touching the dataset: a `resolvable_by: "rag"` ground-truth
+gap must not also carry an `expected_answer` (the oracle would mask a retrieval
+failure), and each case runs under `harness.isolate(...)` so its RAG corpus, Chroma
+index and output dir stay private. Full reference: `docs/07-evaluation.md`.
+
+**Scoring** (`evals/scoring.py` = pure functions, `run_scoring.py` = CLI/report/IO).
+Predicted↔annotated matching is by *content* — runtime gap ids are content hashes —
+reusing `keyword_score` from `simulator.py` so the scorer and the oracle can't drift.
+Four invariants worth keeping: the scorer never writes to what it reads; precision is
+strict (an unannotated detection is a false positive) so `unmatched_predictions` is
+always printed for review; the critic's answer-vs-answer contradictions can raise
+recall but are never false positives, because ground truth only annotates
+CDC-internal ones; and `predictions.json` carries `decision_log` because RAG rank
+order lives nowhere else (a *rejected* retrieval leaves no `ContextItem`, only a
+`rag_rejected` entry with `evidence_ids`). Question quality is deterministic by
+default; `--judge llm` adds an LLM rubric beside it, never merged into it.
+
+**The benchmark is resumable, so nothing is buffered until the end.** Every artifact
+goes through `write_atomic` and is written as it happens — the graph checkpoint after
+each node, the transcript after each question round, `summary.csv`/`report.md` after
+each case, `manifest.json` before the loop. Keep it that way when editing
+`run_benchmark.py`. `predictions.json` is the completion marker `--resume` reads (and
+a case that ended in error counts as done). Mid-case resume works because
+`evals/checkpoints.py` backs LangGraph's `InMemorySaver` with `PersistentDict` on
+disk — no extra dependency — and `thread_id` is deterministic (`bench-<case_id>`).
+Anything stateful a case relies on must be persisted per turn too: that is why the
+stakeholder simulator has `get_state`/`set_state`, and why per-process telemetry is
+summed back together by `merge_telemetry`.
+
 ## Configuration & secrets
 
 - `config/settings.yaml` — `llm` / `embeddings` / `rag` / `loop` / `quarto` settings,
   loaded into typed models by `src/config.py` (memoized via `lru_cache`; call
-  `clear_config_cache()` after editing YAML on disk, as tests do).
+  `clear_config_cache()` after editing YAML on disk, as tests do). The eval harness
+  swaps settings per benchmark case via `set_settings_override(...)`, which sits in
+  front of the cache; outside the harness it is unset and nothing changes.
 - `src/.env` — API keys (`OLLAMA_API_KEY` or `ANTHROPIC_API_KEY`), and optional
   `CDC_LLM_CACHE=1` to memoize structured LLM calls to `.cache/llm/` for fast dev
   iteration (off by default; see `src/llm_cache.py`). Loaded by `src/config.py`.
@@ -108,7 +165,8 @@ which breaks the prepared-statement config.
   Auth uses `streamlit-authenticator`. On Streamlit Cloud, paste the same content into
   the app's Secrets settings.
 
-`.gitignore` excludes `output/*`, `.chroma`, `.cache`, `.env`, `.streamlit`, `prompt.md`.
+`.gitignore` excludes `output/*`, `evals/results/*`, `.chroma`, `.cache`, `.env`,
+`.streamlit`, `prompt.md`. The benchmark **datasets** are committed — they are ground truth.
 
 ## Gotchas
 

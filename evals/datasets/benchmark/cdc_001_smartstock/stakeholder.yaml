@@ -1,0 +1,36 @@
+# Synthetic stakeholder for cdc_001_smartstock.
+#
+# `knowledge` is the ONLY thing the LLM simulator may answer from — it mirrors
+# the ground-truth expected_answers. `unknown` names topics it must refuse even
+# if it could plausibly guess, so the assumption path gets exercised.
+
+name: "Responsable logistique RetailPlus"
+role: "Business Owner"
+
+knowledge:
+  - "Seuls les responsables magasin peuvent modifier les quantités en stock ; les employés consultent et signalent un écart."
+  - "La direction et le responsable logistique ont un accès en lecture sur les 18 magasins."
+  - "Le seuil d'alerte est défini par référence produit par le responsable logistique, avec par défaut la consommation moyenne de 7 jours."
+  - "En cas de modification concurrente, la dernière écriture est refusée et l'utilisateur doit recharger la fiche produit."
+  - "Hors ligne, seule la consultation du dernier stock connu est possible ; la saisie de mouvements est bloquée."
+  - "Le rapport attendu est hebdomadaire, par magasin, exportable en Excel et en PDF."
+  - "Un fournisseur porte un code, une raison sociale, un contact et un délai de livraison contractuel."
+  - "La synchronisation avec SAP se fait par fichiers plats déposés chaque nuit sur un serveur SFTP."
+  - "SmartStock est la source de vérité pour les quantités, SAP pour les référentiels produits."
+  - "Le parc représente environ 12 000 références, 18 magasins, 60 utilisateurs simultanés et 5 000 mouvements par jour."
+  - "Le déploiement se fait en trois vagues : deux magasins pilotes, puis six, puis les dix restants."
+  - "Le budget réellement voté par la direction est de 80 000 €."
+
+unknown:
+  - "Les exigences de chiffrement et de gestion des secrets"
+  - "Les critères d'acceptation détaillés par fonctionnalité"
+  - "La date de livraison définitive"
+
+behavior:
+  style: precise
+  unknown_rate: 0.0
+  allow_contradictions: false
+
+contradictions:
+  - "En fait tous les employés de magasin peuvent modifier les quantités en stock, il n'y a pas de restriction."
+  - "Le budget est bien de 150 000 €, la contrainte des 80 000 € ne s'applique plus."

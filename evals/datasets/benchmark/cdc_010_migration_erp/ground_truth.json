@@ -1,0 +1,200 @@
+{
+  "case_id": "cdc_010_migration_erp",
+  "title": "Migration du module Achats vers le nouvel ERP",
+  "dataset_version": "v1",
+  "annotator": "équipe CDC (relecture experte)",
+  "notes": "Cas périmètre et planning. Les phrases fautives sont grammaticalement irréprochables et ne contiennent aucun chiffre contradictoire évident : « les processus existants sont repris », « l'historique est conservé », « les interfaces sont adaptées ». C'est le cas le plus difficile du jeu — il teste si le système repère une lacune quand rien ne « sonne » vague. Les contradictions de périmètre (intégral vs abandons, 7 sites vs pilotes) et de planning (1er juillet vs démarrage en mai) sont réelles mais discrètes.",
+  "gaps": [
+    {
+      "id": "GT-GAP-001",
+      "section_id": "functional",
+      "category": "scope",
+      "severity": "blocking",
+      "description": "« Les processus existants sont repris » et « les écarts sont traités au cas par cas » : aucun périmètre fonctionnel réel, aucun arbitrage écart / standard du progiciel.",
+      "keywords": ["processus", "ecart", "cas par cas"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-002",
+      "section_id": "functional",
+      "category": "data_model",
+      "severity": "blocking",
+      "description": "« Les données de l'ancien système sont reprises » et « l'historique est conservé » : ni profondeur d'historique, ni périmètre de données, ni règles de transformation ou de qualité.",
+      "keywords": ["reprise", "historique", "donnees"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-003",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "« Le circuit reste identique à l'existant » sans décrire ce circuit : ni seuils de validation, ni délégations, ni suppléance.",
+      "keywords": ["circuit", "validation", "seuil"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-004",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "blocking",
+      "description": "« Les commandes en cours au moment de la bascule sont traitées » ne dit pas comment : reprise dans le nouvel ERP, clôture dans l'ancien, ou double saisie.",
+      "keywords": ["commandes en cours", "bascule"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-005",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "blocking",
+      "description": "« Les interfaces existantes sont adaptées » : ni inventaire, ni contrats, ni stratégie de bascule des flux.",
+      "keywords": ["interface", "adaptee", "flux"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-006",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "important",
+      "description": "« Performances au moins équivalentes à l'existant » : aucune mesure de référence de l'existant, donc exigence invérifiable.",
+      "keywords": ["performance", "equivalente", "reference"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-007",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "blocking",
+      "description": "« Les habilitations sont reprises » : ni matrice de rôles, ni correspondance entre les rôles de l'ancien et du nouvel ERP.",
+      "keywords": ["habilitation", "role"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-008",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "important",
+      "description": "L'hébergement chez l'éditeur n'est assorti d'aucune exigence : réversibilité, localisation des données, engagement de service.",
+      "keywords": ["editeur", "hebergement", "reversibilite"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-009",
+      "section_id": "functional",
+      "category": "acceptance_criteria",
+      "severity": "blocking",
+      "description": "Aucun critère d'acceptation pour « basculer sans interrompre l'activité », qui est pourtant l'objectif du projet.",
+      "keywords": ["critere", "interruption"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-010",
+      "section_id": "constraints",
+      "category": "scope",
+      "severity": "important",
+      "description": "« Certaines fonctionnalités marginales pourront être abandonnées » : ni liste, ni critère, ni décideur.",
+      "keywords": ["marginales", "abandonnees"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-011",
+      "section_id": "constraints",
+      "category": "scope",
+      "severity": "important",
+      "description": "Aucune stratégie de retour arrière si la bascule échoue, alors que l'ancien système est arrêté.",
+      "keywords": ["retour arriere", "echec"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-012",
+      "section_id": "problem",
+      "category": "functional_ambiguity",
+      "severity": "nice_to_have",
+      "description": "« Sans interrompre l'activité » n'est pas quantifié : aucune durée d'indisponibilité tolérée.",
+      "keywords": ["interruption", "activite"],
+      "resolvable_by": "human"
+    }
+  ],
+  "contradictions": [
+    {
+      "id": "GT-CON-001",
+      "statement_a": "Sont concernés les 7 sites ; le module Achats est repris intégralement",
+      "statement_b": "La première phase couvre les sites pilotes ; certaines fonctionnalités marginales pourront être abandonnées",
+      "section_ids": ["constraints"],
+      "severity": "blocking",
+      "keywords": ["integralement", "pilotes"]
+    },
+    {
+      "id": "GT-CON-002",
+      "statement_a": "Bascule prévue au 1er juillet, projet démarrant en mai",
+      "statement_b": "La bascule ne pourra pas avoir lieu pendant la période de clôture annuelle",
+      "section_ids": ["constraints"],
+      "severity": "important",
+      "keywords": ["juillet", "cloture"]
+    },
+    {
+      "id": "GT-CON-003",
+      "statement_a": "Les processus existants sont repris à l'identique et le circuit de validation reste identique",
+      "statement_b": "Hors périmètre : la refonte des processus achats — alors que le progiciel impose son standard",
+      "section_ids": ["functional", "constraints"],
+      "severity": "important",
+      "keywords": ["identique", "refonte"]
+    }
+  ],
+  "expected_answers": [
+    {
+      "gap_ref": "GT-GAP-001",
+      "answer": "Le standard du progiciel s'applique par défaut ; un écart n'est retenu que s'il porte sur une obligation légale ou un engagement fournisseur, et il est arbitré par la direction des achats.",
+      "keywords": ["standard", "ecart"]
+    },
+    {
+      "gap_ref": "GT-GAP-002",
+      "answer": "Trois exercices d'historique sont repris dans le nouvel ERP ; au-delà, l'ancien système reste consultable en lecture seule dix ans. Les fournisseurs inactifs depuis deux ans ne sont pas repris.",
+      "keywords": ["exercices", "historique"]
+    },
+    {
+      "gap_ref": "GT-GAP-003",
+      "answer": "Une demande d'achat est validée par le responsable de service jusqu'à 5 000 €, par le directeur de site jusqu'à 50 000 €, par la direction des achats au-delà. Chaque valideur doit avoir un suppléant nommé.",
+      "keywords": ["validee", "suppleant"]
+    },
+    {
+      "gap_ref": "GT-GAP-004",
+      "answer": "Les commandes non réceptionnées sont reprises dans le nouvel ERP avec leur reliquat ; les commandes réceptionnées mais non facturées sont soldées dans l'ancien système avant la bascule.",
+      "keywords": ["commandes", "reliquat"]
+    },
+    {
+      "gap_ref": "GT-GAP-005",
+      "answer": "Quatre interfaces sont concernées : comptabilité, référentiel fournisseurs, portail fournisseurs et entrepôt de données. Toutes basculent le même week-end que l'ERP, sans fonctionnement en double.",
+      "keywords": ["interfaces", "basculent"]
+    },
+    {
+      "gap_ref": "GT-GAP-006",
+      "answer": "La référence est l'existant mesuré avant bascule : affichage d'une demande d'achat en moins de deux secondes et édition d'une commande en moins de cinq secondes.",
+      "keywords": ["reference", "secondes"]
+    },
+    {
+      "gap_ref": "GT-GAP-007",
+      "answer": "Quatre rôles sont conservés : demandeur, acheteur, valideur et administrateur achats. La correspondance avec les rôles du progiciel est établie avant la recette et validée par l'audit interne.",
+      "keywords": ["roles", "correspondance"]
+    },
+    {
+      "gap_ref": "GT-GAP-009",
+      "answer": "La bascule est acceptée si les demandes d'achat peuvent être créées et validées le lundi matin suivant le week-end de bascule, et si le rapprochement facture fonctionne sur un échantillon de 50 commandes reprises.",
+      "keywords": ["bascule", "echantillon"]
+    },
+    {
+      "gap_ref": "GT-GAP-010",
+      "answer": "Les fonctionnalités utilisées par moins de trois utilisateurs sur les douze derniers mois sont candidates à l'abandon, sur décision de la direction des achats.",
+      "keywords": ["abandon", "utilisateurs"]
+    },
+    {
+      "gap_ref": "GT-GAP-011",
+      "answer": "L'ancien système reste démarrable pendant deux semaines après la bascule ; la décision de retour arrière se prend au plus tard le mardi suivant, sur constat d'un blocage des commandes.",
+      "keywords": ["retour arriere", "deux semaines"]
+    },
+    {
+      "gap_ref": "GT-GAP-012",
+      "answer": "Une interruption d'un week-end complet est acceptable, mais aucune interruption en semaine : les achats doivent rouvrir le lundi 8h.",
+      "keywords": ["interruption", "week-end"]
+    }
+  ]
+}

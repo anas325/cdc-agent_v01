@@ -25,38 +25,12 @@ sys.path.insert(0, str(ROOT))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from src import config as config_module  # noqa: E402
-from src import llm as llm_module  # noqa: E402
+from evals.harness import override_llm_provider  # noqa: E402
 from src.agents import critic as critic_module  # noqa: E402
 from src.agents import gap_finder as gap_finder_module  # noqa: E402
 from src.state import ContextItem, Gap, SectionConfig, SectionStatus  # noqa: E402
 
 DATASETS_DIR = Path(__file__).resolve().parent / "datasets"
-
-# Only the model needs to change when forcing a provider; base_url/temperature
-# stay whatever config/settings.yaml already has.
-PROVIDER_DEFAULT_MODEL = {
-    "ollama": "gpt-oss:20b",
-    "anthropic": "claude-sonnet-5",
-}
-
-
-def override_llm_provider(provider: str) -> None:
-    """Force every call_structured() call in the agent modules onto `provider`.
-
-    Agent modules do `from src.llm import call_structured` at import time, so
-    the name lives in each agent module's namespace (same pattern used by
-    tests/test_graph_flow.py's ScriptedLLM) — patch it there, not on src.llm.
-    """
-    settings = config_module.load_settings()
-    cfg = settings.llm.model_copy(update={"provider": provider, "model": PROVIDER_DEFAULT_MODEL[provider]})
-    fixed_llm = llm_module._build_llm(cfg, json_mode=(provider == "ollama"))
-
-    def call_structured_fixed(prompt, model, llm=None, max_retries=2):
-        return llm_module.call_structured(prompt, model, llm=fixed_llm, max_retries=max_retries)
-
-    gap_finder_module.call_structured = call_structured_fixed
-    critic_module.call_structured = call_structured_fixed
 
 
 # ---------------------------------------------------------------------------

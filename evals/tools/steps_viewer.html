@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trace Scope — JSONL run visualizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0a0d13;
+    --bg-raised: #10141c;
+    --panel: #131822;
+    --panel-2: #171d29;
+    --border: #232a3a;
+    --border-soft: #1b202c;
+    --text: #dfe4ee;
+    --text-dim: #838fa3;
+    --text-faint: #4c5567;
+    --accent: #5fd4c4;
+    --warn: #f0b429;
+    --crit: #f0555a;
+    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: 'IBM Plex Sans', system-ui, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--mono);}
+  body{min-height:100vh;}
+  ::selection{background:#5fd4c455;}
+  ::-webkit-scrollbar{height:10px;width:10px;}
+  ::-webkit-scrollbar-track{background:var(--bg-raised);}
+  ::-webkit-scrollbar-thumb{background:#2a3243;border-radius:6px;}
+  ::-webkit-scrollbar-thumb:hover{background:#39435a;}
+
+  .wrap{max-width:1400px;margin:0 auto;padding:28px 28px 80px;}
+
+  /* ---------- header ---------- */
+  header{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;margin-bottom:22px;border-bottom:1px solid var(--border);padding-bottom:18px;flex-wrap:wrap;}
+  .brand{display:flex;flex-direction:column;gap:4px;}
+  .brand .mark{display:flex;align-items:center;gap:10px;}
+  .brand .dot{width:10px;height:10px;border-radius:2px;background:var(--accent);box-shadow:0 0 12px #5fd4c488;}
+  .brand h1{font-size:19px;margin:0;font-weight:700;letter-spacing:.01em;}
+  .brand p{margin:0;color:var(--text-dim);font-size:12.5px;}
+  .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .btn{
+    font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.02em;
+    background:var(--panel-2);color:var(--text);border:1px solid var(--border);
+    padding:9px 14px;border-radius:6px;cursor:pointer;transition:.12s border-color,.12s background;
+  }
+  .btn:hover{border-color:#39435a;background:#1c2330;}
+  .btn.primary{background:#163632;border-color:#245c53;color:var(--accent);}
+  .btn.primary:hover{background:#1a413c;}
+  input[type=file]{display:none;}
+  #drop-status{font-size:11px;color:var(--text-faint);}
+
+  /* ---------- stat cards ---------- */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:26px;}
+  .stat{background:var(--panel);padding:14px 16px;}
+  .stat .label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-faint);margin-bottom:6px;}
+  .stat .value{font-size:20px;font-weight:700;color:var(--text);}
+  .stat .value.warn{color:var(--warn);}
+  .stat .value.crit{color:var(--crit);}
+  .stat .sub{font-size:10.5px;color:var(--text-dim);margin-top:3px;}
+
+  section{margin-bottom:30px;}
+  .sec-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;gap:12px;flex-wrap:wrap;}
+  .sec-head h2{font-size:13px;margin:0;text-transform:uppercase;letter-spacing:.08em;color:var(--text);font-weight:700;}
+  .sec-head .desc{font-size:11.5px;color:var(--text-dim);font-family:var(--sans);}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--text-dim);}
+  .legend span{display:inline-flex;align-items:center;gap:5px;}
+  .legend i{width:9px;height:9px;border-radius:2px;display:inline-block;}
+
+  /* ---------- node cost chart ---------- */
+  .costchart{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px 18px;}
+  .cost-row{display:grid;grid-template-columns:150px 1fr 128px;align-items:center;gap:12px;padding:6px 0;}
+  .cost-row .name{font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;}
+  .cost-row .name i{width:9px;height:9px;border-radius:2px;flex:none;}
+  .cost-row .track{position:relative;height:16px;background:var(--bg-raised);border-radius:3px;overflow:hidden;}
+  .cost-row .fill{position:absolute;left:0;top:0;height:100%;border-radius:3px;}
+  .cost-row .fill.sync{opacity:.55;}
+  .cost-row .nums{font-size:11px;color:var(--text-dim);text-align:right;white-space:nowrap;}
+  .cost-row .nums b{color:var(--text);font-weight:600;}
+
+  /* ---------- waterfall ---------- */
+  .waterfall{background:var(--panel);border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+  .wf-scroll{overflow-x:auto;}
+  .wf-axis{display:grid;grid-template-columns:150px 1fr;border-bottom:1px solid var(--border-soft);background:var(--bg-raised);position:sticky;top:0;z-index:2;min-width:900px;}
+  .wf-axis .corner{padding:8px 12px;font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.06em;border-right:1px solid var(--border-soft);}
+  .wf-axis .ticks{position:relative;height:28px;}
+  .wf-axis .tick{position:absolute;top:0;bottom:0;border-left:1px solid var(--border-soft);font-size:9.5px;color:var(--text-faint);padding-left:4px;padding-top:8px;white-space:nowrap;}
+  .wf-body{min-width:900px;}
+  .wf-row{display:grid;grid-template-columns:150px 1fr;border-bottom:1px solid var(--border-soft);}
+  .wf-row:hover{background:#101623;}
+  .wf-row .rowlabel{padding:10px 12px;border-right:1px solid var(--border-soft);display:flex;flex-direction:column;justify-content:center;gap:2px;}
+  .wf-row .rowlabel b{font-size:12px;}
+  .wf-row .rowlabel span{font-size:10px;color:var(--text-faint);}
+  .wf-row .track{position:relative;height:42px;}
+  .seg{position:absolute;top:9px;height:24px;border-radius:3px;cursor:pointer;min-width:3px;transition:filter .1s, transform .1s;}
+  .seg:hover{filter:brightness(1.35);transform:scaleY(1.08);z-index:5;}
+  .seg.elevated{box-shadow:0 0 0 1px var(--warn);}
+  .seg.critical{box-shadow:0 0 0 1.5px var(--crit);}
+  .seg.critical::after{content:'';position:absolute;inset:-4px;border-radius:6px;border:1px solid #f0555a55;animation:pulse 1.8s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:.7;}50%{opacity:0;}}
+  .turn-total{position:absolute;right:8px;top:9px;font-size:10px;color:var(--text-faint);line-height:24px;}
+
+  /* ---------- table ---------- */
+  .tablewrap{background:var(--panel);border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+  .tbl-tools{display:flex;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border-soft);background:var(--bg-raised);}
+  .tbl-tools input, .tbl-tools select{
+    font-family:var(--mono);font-size:11.5px;background:var(--panel);border:1px solid var(--border);color:var(--text);
+    padding:6px 9px;border-radius:5px;
+  }
+  .tbl-tools input{flex:1;}
+  table{width:100%;border-collapse:collapse;font-size:11.5px;}
+  thead th{position:sticky;top:0;background:var(--bg-raised);text-align:left;padding:8px 12px;color:var(--text-faint);font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:.05em;cursor:pointer;border-bottom:1px solid var(--border-soft);white-space:nowrap;}
+  thead th:hover{color:var(--text-dim);}
+  tbody td{padding:7px 12px;border-bottom:1px solid var(--border-soft);white-space:nowrap;}
+  tbody tr{cursor:pointer;}
+  tbody tr:hover{background:#101623;}
+  .maxh{max-height:360px;overflow:auto;}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:600;}
+  .pill i{width:7px;height:7px;border-radius:2px;}
+  .num{color:var(--text-dim);font-variant-numeric:tabular-nums;}
+  .num.warn{color:var(--warn);font-weight:700;}
+  .num.crit{color:var(--crit);font-weight:700;}
+  .keys{color:var(--text-faint);font-size:10.5px;}
+
+  /* ---------- drawer ---------- */
+  #overlay{position:fixed;inset:0;background:#000a;opacity:0;pointer-events:none;transition:opacity .15s;z-index:10;}
+  #overlay.open{opacity:1;pointer-events:auto;}
+  #drawer{position:fixed;top:0;right:-460px;width:440px;max-width:92vw;height:100%;background:var(--panel);border-left:1px solid var(--border);z-index:11;transition:right .18s ease;display:flex;flex-direction:column;}
+  #drawer.open{right:0;}
+  #drawer .dhead{padding:16px 18px;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:flex-start;background:var(--bg-raised);}
+  #drawer .dhead h3{margin:0 0 4px;font-size:14px;}
+  #drawer .dhead p{margin:0;font-size:11px;color:var(--text-dim);}
+  #drawer .close{cursor:pointer;color:var(--text-faint);font-size:20px;line-height:1;background:none;border:none;}
+  #drawer .close:hover{color:var(--text);}
+  #drawer .dbody{padding:16px 18px;overflow:auto;flex:1;}
+  #drawer pre{margin:0;font-size:11.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;color:#b9e6dc;}
+  #drawer .metrics{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+  #drawer .m{background:var(--bg-raised);border:1px solid var(--border-soft);border-radius:6px;padding:9px 11px;}
+  #drawer .m .l{font-size:9.5px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.06em;}
+  #drawer .m .v{font-size:15px;font-weight:700;margin-top:2px;}
+
+  .empty{padding:60px 20px;text-align:center;color:var(--text-faint);font-family:var(--sans);}
+  .footer-note{font-family:var(--sans);font-size:11px;color:var(--text-faint);margin-top:10px;line-height:1.6;}
+  code{background:var(--bg-raised);padding:1px 5px;border-radius:3px;font-size:10.5px;color:var(--accent);}
+
+  @media (max-width:760px){
+    .cost-row{grid-template-columns:110px 1fr 90px;}
+    .wf-axis, .wf-body{min-width:640px;}
+  }
+</style>
+</head>
+<body>
+
+<div id="overlay"></div>
+<div id="drawer">
+  <div class="dhead">
+    <div>
+      <h3 id="d-title">—</h3>
+      <p id="d-sub">—</p>
+    </div>
+    <button class="close" id="d-close">✕</button>
+  </div>
+  <div class="dbody">
+    <div class="metrics" id="d-metrics"></div>
+    <div class="keys" style="margin-bottom:8px;color:var(--text-faint);font-size:10px;text-transform:uppercase;letter-spacing:.06em;">Raw record</div>
+    <pre id="d-raw"></pre>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <div class="mark"><span class="dot"></span><h1>Trace Scope</h1></div>
+      <p>Load a JSONL run log — spot which node is burning your time, turn by turn.</p>
+    </div>
+    <div class="controls">
+      <span id="drop-status">demo trace loaded</span>
+      <button class="btn" id="btn-paste">Paste JSONL</button>
+      <button class="btn primary" id="btn-upload">Load file…</button>
+      <input type="file" id="file-input" accept=".jsonl,.json,.log,.txt">
+    </div>
+  </header>
+
+  <div class="stats" id="stats"></div>
+
+  <section id="sec-cost">
+    <div class="sec-head">
+      <h2>Time sink by node type</h2>
+      <div class="desc">Total execution time (<span style="color:var(--accent)">■</span> node_s) and sync overhead (<span style="color:var(--accent);opacity:.55">■</span> sync_s) summed across every call, worst first.</div>
+    </div>
+    <div class="costchart" id="costchart"></div>
+  </section>
+
+  <section id="sec-wf">
+    <div class="sec-head">
+      <h2>Waterfall by turn</h2>
+      <div class="desc">One row per turn, same time scale throughout — a row that suddenly stretches out is a regression. Ringed segments are statistical outliers for that node type.</div>
+    </div>
+    <div class="waterfall">
+      <div class="wf-axis">
+        <div class="corner">turn</div>
+        <div class="ticks" id="wf-ticks"></div>
+      </div>
+      <div class="wf-scroll">
+        <div class="wf-body" id="wf-body"></div>
+      </div>
+    </div>
+    <div class="legend" id="wf-legend" style="margin-top:12px;"></div>
+  </section>
+
+  <section id="sec-table">
+    <div class="sec-head">
+      <h2>All steps</h2>
+      <div class="desc">Sortable, filterable. Click a row for the full record.</div>
+    </div>
+    <div class="tablewrap">
+      <div class="tbl-tools">
+        <input id="tbl-search" placeholder="filter by node, turn, key…">
+        <select id="tbl-node-filter"><option value="">all nodes</option></select>
+      </div>
+      <div class="maxh">
+        <table>
+          <thead>
+            <tr>
+              <th data-k="step">step</th>
+              <th data-k="turn">turn</th>
+              <th data-k="node">node</th>
+              <th data-k="at">timestamp</th>
+              <th data-k="node_s">node_s</th>
+              <th data-k="sync_s">sync_s</th>
+              <th data-k="gap_s">gap</th>
+              <th data-k="keys">keys touched</th>
+            </tr>
+          </thead>
+          <tbody id="tbl-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <p class="footer-note">
+      <b>gap</b> = time between this row's <code>at</code> and the previous row's <code>at</code>, minus this row's own <code>node_s + sync_s</code>. A large positive gap is latency the log isn't attributing to any node (queueing, network, an untimed call) — worth investigating even though no single step looks slow.
+    </p>
+  </section>
+
+  <section id="paste-panel" style="display:none;">
+    <div class="sec-head"><h2>Paste JSONL</h2></div>
+    <textarea id="paste-area" style="width:100%;height:200px;background:var(--panel);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--mono);font-size:12px;padding:12px;" placeholder='{"step": 1, "node": "ingest", ...}&#10;{"step": 2, "node": "orchestrator", ...}'></textarea>
+    <div style="margin-top:10px;"><button class="btn primary" id="btn-paste-load">Visualize pasted data</button></div>
+  </section>
+
+</div>
+
+<script id="demo-data" type="application/x-jsonl">
+{"step": 1, "node": "ingest", "turn": 0, "at": "2026-08-05T13:06:18.029096+00:00", "node_s": 10.25, "sync_s": 0.005, "keys": ["asked_questions", "context_items", "done", "gaps", "loop_settings", "pending_user_questions", "section_statuses", "sections_config", "stop_reason", "turn", "turn_log"]}
+{"step": 2, "node": "initial_scan", "turn": 0, "at": "2026-08-05T13:06:18.334917+00:00", "node_s": 0.186, "sync_s": 0.108, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 3, "node": "orchestrator", "turn": 1, "at": "2026-08-05T13:06:18.463638+00:00", "node_s": 0.0, "sync_s": 0.112, "keys": ["current_mode", "current_section_id", "turn", "turn_log"]}
+{"step": 4, "node": "gap_finder", "turn": 1, "at": "2026-08-05T13:06:18.581694+00:00", "node_s": 0.014, "sync_s": 0.093, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 5, "node": "gap_filler", "turn": 1, "at": "2026-08-05T13:06:19.921982+00:00", "node_s": 1.222, "sync_s": 0.11, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 6, "node": "human_input", "turn": 1, "at": "2026-08-05T13:06:20.054939+00:00", "node_s": 0.0, "sync_s": 0.1, "keys": ["_raw_answers"]}
+{"step": 7, "node": "integrate_answers", "turn": 1, "at": "2026-08-05T13:06:20.192878+00:00", "node_s": 0.03, "sync_s": 0.099, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 8, "node": "critic", "turn": 1, "at": "2026-08-05T13:06:20.324811+00:00", "node_s": 0.02, "sync_s": 0.098, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 9, "node": "orchestrator", "turn": 2, "at": "2026-08-05T13:06:20.428958+00:00", "node_s": 0.0, "sync_s": 0.093, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 10, "node": "gap_finder", "turn": 2, "at": "2026-08-05T13:06:20.561015+00:00", "node_s": 0.025, "sync_s": 0.09, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 11, "node": "gap_filler", "turn": 2, "at": "2026-08-05T13:06:21.813808+00:00", "node_s": 1.108, "sync_s": 0.135, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 12, "node": "human_input", "turn": 2, "at": "2026-08-05T13:06:21.977658+00:00", "node_s": 0.0, "sync_s": 0.126, "keys": ["_raw_answers"]}
+{"step": 13, "node": "integrate_answers", "turn": 2, "at": "2026-08-05T13:06:22.238112+00:00", "node_s": 0.054, "sync_s": 0.189, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 14, "node": "critic", "turn": 2, "at": "2026-08-05T13:06:22.424197+00:00", "node_s": 0.005, "sync_s": 0.149, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 15, "node": "orchestrator", "turn": 3, "at": "2026-08-05T13:06:22.623606+00:00", "node_s": 0.0, "sync_s": 0.181, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 16, "node": "gap_finder", "turn": 3, "at": "2026-08-05T13:06:22.805428+00:00", "node_s": 0.021, "sync_s": 0.139, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 17, "node": "gap_filler", "turn": 3, "at": "2026-08-05T13:06:24.549383+00:00", "node_s": 1.602, "sync_s": 0.13, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 18, "node": "human_input", "turn": 3, "at": "2026-08-05T13:06:24.710492+00:00", "node_s": 0.0, "sync_s": 0.123, "keys": ["_raw_answers"]}
+{"step": 19, "node": "integrate_answers", "turn": 3, "at": "2026-08-05T13:06:24.884988+00:00", "node_s": 0.035, "sync_s": 0.124, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 20, "node": "critic", "turn": 3, "at": "2026-08-05T13:06:25.032431+00:00", "node_s": 0.004, "sync_s": 0.124, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 21, "node": "orchestrator", "turn": 4, "at": "2026-08-05T13:06:25.179838+00:00", "node_s": 0.0, "sync_s": 0.119, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 22, "node": "gap_finder", "turn": 4, "at": "2026-08-05T13:06:25.345996+00:00", "node_s": 0.017, "sync_s": 0.135, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 23, "node": "gap_filler", "turn": 4, "at": "2026-08-05T13:06:26.898563+00:00", "node_s": 1.418, "sync_s": 0.113, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 24, "node": "human_input", "turn": 4, "at": "2026-08-05T13:06:27.067827+00:00", "node_s": 0.0, "sync_s": 0.13, "keys": ["_raw_answers"]}
+{"step": 25, "node": "integrate_answers", "turn": 4, "at": "2026-08-05T13:06:27.239611+00:00", "node_s": 0.019, "sync_s": 0.134, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 26, "node": "critic", "turn": 4, "at": "2026-08-05T13:06:27.386340+00:00", "node_s": 0.005, "sync_s": 0.121, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 27, "node": "orchestrator", "turn": 5, "at": "2026-08-05T13:06:27.526200+00:00", "node_s": 0.0, "sync_s": 0.122, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 28, "node": "gap_finder", "turn": 5, "at": "2026-08-05T13:06:27.676087+00:00", "node_s": 0.02, "sync_s": 0.111, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 29, "node": "gap_filler", "turn": 5, "at": "2026-08-05T13:06:58.311251+00:00", "node_s": 30.494, "sync_s": 0.123, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 30, "node": "human_input", "turn": 5, "at": "2026-08-05T13:06:58.458085+00:00", "node_s": 0.0, "sync_s": 0.11, "keys": ["_raw_answers"]}
+{"step": 31, "node": "integrate_answers", "turn": 5, "at": "2026-08-05T13:06:58.602489+00:00", "node_s": 0.0, "sync_s": 0.124, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 32, "node": "critic", "turn": 5, "at": "2026-08-05T13:07:03.458898+00:00", "node_s": 4.696, "sync_s": 0.139, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 33, "node": "orchestrator", "turn": 6, "at": "2026-08-05T13:07:03.595330+00:00", "node_s": 0.0, "sync_s": 0.111, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 34, "node": "gap_finder", "turn": 6, "at": "2026-08-05T13:07:07.794446+00:00", "node_s": 4.068, "sync_s": 0.116, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 35, "node": "gap_filler", "turn": 6, "at": "2026-08-05T13:07:20.144008+00:00", "node_s": 12.183, "sync_s": 0.147, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 36, "node": "human_input", "turn": 6, "at": "2026-08-05T13:07:20.320241+00:00", "node_s": 0.0, "sync_s": 0.138, "keys": ["_raw_answers"]}
+{"step": 37, "node": "integrate_answers", "turn": 6, "at": "2026-08-05T13:07:20.511268+00:00", "node_s": 0.0, "sync_s": 0.168, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 38, "node": "critic", "turn": 6, "at": "2026-08-05T13:07:30.421558+00:00", "node_s": 9.784, "sync_s": 0.113, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 39, "node": "orchestrator", "turn": 7, "at": "2026-08-05T13:07:30.568401+00:00", "node_s": 0.0, "sync_s": 0.124, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 40, "node": "gap_finder", "turn": 7, "at": "2026-08-05T13:07:35.528753+00:00", "node_s": 4.789, "sync_s": 0.148, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 41, "node": "gap_filler", "turn": 7, "at": "2026-08-05T13:07:52.646850+00:00", "node_s": 16.97, "sync_s": 0.124, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 42, "node": "human_input", "turn": 7, "at": "2026-08-05T13:07:52.840911+00:00", "node_s": 0.0, "sync_s": 0.148, "keys": ["_raw_answers"]}
+{"step": 43, "node": "integrate_answers", "turn": 7, "at": "2026-08-05T13:07:52.997964+00:00", "node_s": 0.0, "sync_s": 0.137, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 44, "node": "critic", "turn": 7, "at": "2026-08-05T13:08:03.935798+00:00", "node_s": 10.8, "sync_s": 0.123, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 45, "node": "orchestrator", "turn": 8, "at": "2026-08-05T13:08:04.067677+00:00", "node_s": 0.0, "sync_s": 0.112, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 46, "node": "gap_finder", "turn": 8, "at": "2026-08-05T13:08:09.367852+00:00", "node_s": 5.137, "sync_s": 0.147, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 47, "node": "gap_filler", "turn": 8, "at": "2026-08-05T13:08:29.330998+00:00", "node_s": 19.818, "sync_s": 0.124, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 48, "node": "human_input", "turn": 8, "at": "2026-08-05T13:08:29.500691+00:00", "node_s": 0.0, "sync_s": 0.129, "keys": ["_raw_answers"]}
+{"step": 49, "node": "integrate_answers", "turn": 8, "at": "2026-08-05T13:08:36.660382+00:00", "node_s": 6.919, "sync_s": 0.22, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 50, "node": "critic", "turn": 8, "at": "2026-08-05T13:08:50.239959+00:00", "node_s": 12.653, "sync_s": 0.904, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 51, "node": "orchestrator", "turn": 9, "at": "2026-08-05T13:08:50.834377+00:00", "node_s": 0.0, "sync_s": 0.283, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 52, "node": "gap_finder", "turn": 9, "at": "2026-08-05T13:08:56.990643+00:00", "node_s": 5.746, "sync_s": 0.179, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 53, "node": "gap_filler", "turn": 9, "at": "2026-08-05T13:09:13.450809+00:00", "node_s": 16.222, "sync_s": 0.158, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 54, "node": "human_input", "turn": 9, "at": "2026-08-05T13:09:13.643257+00:00", "node_s": 0.0, "sync_s": 0.149, "keys": ["_raw_answers"]}
+{"step": 55, "node": "integrate_answers", "turn": 9, "at": "2026-08-05T13:09:17.422952+00:00", "node_s": 3.608, "sync_s": 0.151, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 56, "node": "critic", "turn": 9, "at": "2026-08-05T13:09:26.691824+00:00", "node_s": 9.126, "sync_s": 0.124, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 57, "node": "orchestrator", "turn": 10, "at": "2026-08-05T13:09:26.826072+00:00", "node_s": 0.0, "sync_s": 0.115, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 58, "node": "gap_finder", "turn": 10, "at": "2026-08-05T13:09:37.966139+00:00", "node_s": 10.997, "sync_s": 0.124, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 59, "node": "gap_filler", "turn": 10, "at": "2026-08-05T13:09:51.973202+00:00", "node_s": 13.839, "sync_s": 0.149, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 60, "node": "human_input", "turn": 10, "at": "2026-08-05T13:09:52.296280+00:00", "node_s": 0.0, "sync_s": 0.248, "keys": ["_raw_answers"]}
+{"step": 61, "node": "integrate_answers", "turn": 10, "at": "2026-08-05T13:09:58.706843+00:00", "node_s": 6.21, "sync_s": 0.159, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 62, "node": "critic", "turn": 10, "at": "2026-08-05T13:10:48.405602+00:00", "node_s": 49.531, "sync_s": 0.143, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 63, "node": "orchestrator", "turn": 11, "at": "2026-08-05T13:10:48.573288+00:00", "node_s": 0.0, "sync_s": 0.147, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 64, "node": "gap_finder", "turn": 11, "at": "2026-08-05T13:10:54.927464+00:00", "node_s": 6.22, "sync_s": 0.114, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 65, "node": "gap_filler", "turn": 11, "at": "2026-08-05T13:11:25.677312+00:00", "node_s": 30.611, "sync_s": 0.127, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 66, "node": "human_input", "turn": 11, "at": "2026-08-05T13:11:25.961924+00:00", "node_s": 0.0, "sync_s": 0.247, "keys": ["_raw_answers"]}
+{"step": 67, "node": "integrate_answers", "turn": 11, "at": "2026-08-05T13:11:32.921831+00:00", "node_s": 6.799, "sync_s": 0.126, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 68, "node": "critic", "turn": 11, "at": "2026-08-05T13:11:43.871574+00:00", "node_s": 10.804, "sync_s": 0.128, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 69, "node": "orchestrator", "turn": 12, "at": "2026-08-05T13:11:44.012690+00:00", "node_s": 0.0, "sync_s": 0.121, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 70, "node": "gap_finder", "turn": 12, "at": "2026-08-05T13:11:55.072874+00:00", "node_s": 10.914, "sync_s": 0.125, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 71, "node": "gap_filler", "turn": 12, "at": "2026-08-05T13:12:40.468472+00:00", "node_s": 45.246, "sync_s": 0.134, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 72, "node": "human_input", "turn": 12, "at": "2026-08-05T13:12:40.641016+00:00", "node_s": 0.0, "sync_s": 0.133, "keys": ["_raw_answers"]}
+{"step": 73, "node": "integrate_answers", "turn": 12, "at": "2026-08-05T13:12:49.069564+00:00", "node_s": 8.272, "sync_s": 0.136, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 74, "node": "critic", "turn": 12, "at": "2026-08-05T13:13:19.759863+00:00", "node_s": 30.541, "sync_s": 0.131, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 75, "node": "orchestrator", "turn": 13, "at": "2026-08-05T13:13:19.912608+00:00", "node_s": 0.0, "sync_s": 0.136, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 76, "node": "gap_finder", "turn": 13, "at": "2026-08-05T13:13:30.186486+00:00", "node_s": 9.996, "sync_s": 0.144, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 77, "node": "gap_filler", "turn": 13, "at": "2026-08-05T13:14:29.240135+00:00", "node_s": 58.866, "sync_s": 0.164, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 78, "node": "human_input", "turn": 13, "at": "2026-08-05T13:14:29.431665+00:00", "node_s": 0.0, "sync_s": 0.147, "keys": ["_raw_answers"]}
+{"step": 79, "node": "integrate_answers", "turn": 13, "at": "2026-08-05T13:14:43.273193+00:00", "node_s": 13.685, "sync_s": 0.136, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 80, "node": "critic", "turn": 13, "at": "2026-08-05T13:15:04.586277+00:00", "node_s": 21.139, "sync_s": 0.147, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 81, "node": "orchestrator", "turn": 14, "at": "2026-08-05T13:15:04.731434+00:00", "node_s": 0.0, "sync_s": 0.124, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 82, "node": "gap_finder", "turn": 14, "at": "2026-08-05T13:15:17.012732+00:00", "node_s": 12.108, "sync_s": 0.151, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 83, "node": "gap_filler", "turn": 14, "at": "2026-08-05T13:16:31.261701+00:00", "node_s": 74.073, "sync_s": 0.151, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 84, "node": "human_input", "turn": 14, "at": "2026-08-05T13:16:31.465728+00:00", "node_s": 0.0, "sync_s": 0.157, "keys": ["_raw_answers"]}
+{"step": 85, "node": "integrate_answers", "turn": 14, "at": "2026-08-05T13:16:35.349037+00:00", "node_s": 3.7, "sync_s": 0.16, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 86, "node": "critic", "turn": 14, "at": "2026-08-05T13:16:52.385008+00:00", "node_s": 16.872, "sync_s": 0.142, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 87, "node": "orchestrator", "turn": 15, "at": "2026-08-05T13:16:52.545565+00:00", "node_s": 0.0, "sync_s": 0.139, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 88, "node": "gap_finder", "turn": 15, "at": "2026-08-05T13:17:03.703023+00:00", "node_s": 11.0, "sync_s": 0.136, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 89, "node": "gap_filler", "turn": 15, "at": "2026-08-05T13:17:20.195940+00:00", "node_s": 16.325, "sync_s": 0.149, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 90, "node": "human_input", "turn": 15, "at": "2026-08-05T13:17:20.390413+00:00", "node_s": 0.0, "sync_s": 0.13, "keys": ["_raw_answers"]}
+{"step": 91, "node": "integrate_answers", "turn": 15, "at": "2026-08-05T13:17:26.454672+00:00", "node_s": 5.891, "sync_s": 0.151, "keys": ["active_fresh_item_ids", "asked_questions", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+{"step": 92, "node": "critic", "turn": 15, "at": "2026-08-05T13:17:57.482314+00:00", "node_s": 30.861, "sync_s": 0.142, "keys": ["decision_log", "gaps", "section_statuses", "turn_log"]}
+{"step": 93, "node": "orchestrator", "turn": 16, "at": "2026-08-05T13:17:57.650199+00:00", "node_s": 0.0, "sync_s": 0.146, "keys": ["active_fresh_item_ids", "context_items", "current_mode", "turn", "turn_log"]}
+{"step": 94, "node": "gap_finder", "turn": 16, "at": "2026-08-05T13:18:07.348381+00:00", "node_s": 9.518, "sync_s": 0.159, "keys": ["decision_log", "gaps", "turn_log"]}
+{"step": 95, "node": "gap_filler", "turn": 16, "at": "2026-08-05T13:18:44.858008+00:00", "node_s": 37.311, "sync_s": 0.17, "keys": ["active_fresh_item_ids", "context_items", "decision_log", "gaps", "pending_user_questions", "turn_log"]}
+</script>
+
+<script>
+(function(){
+  const PALETTE = ['#5fd4c4','#f5a623','#9d7bff','#f0555a','#4fa8e0','#a8d96b','#e86ba6','#e0c24f','#8894aa','#ff8c66','#7ee0ff','#c792ea'];
+  const nodeColor = new Map();
+  function colorFor(node){
+    if(!nodeColor.has(node)) nodeColor.set(node, PALETTE[nodeColor.size % PALETTE.length]);
+    return nodeColor.get(node);
+  }
+
+  let ROWS = [];      // parsed + enriched rows
+  let TURNS = [];      // grouped by turn
+  let NODESTATS = [];  // aggregated per node
+  let sortKey = 'step', sortDir = 1;
+
+  const $ = (sel,root=document)=>root.querySelector(sel);
+  const $$ = (sel,root=document)=>Array.from(root.querySelectorAll(sel));
+  const fmt = (n, d=2)=> (n===undefined||n===null||isNaN(n)) ? '—' : Number(n).toFixed(d);
+  const fmtT = (s)=>{
+    if(s===undefined||s===null||isNaN(s)) return '—';
+    if(s<60) return fmt(s,1)+'s';
+    const m = Math.floor(s/60), r = s-m*60;
+    return m+'m '+fmt(r,0)+'s';
+  };
+
+  function detectDurationKeys(rows){
+    // find numeric keys that look like durations beyond node_s/sync_s (fallback for other schemas)
+    const sample = rows.find(r=>r && typeof r==='object') || {};
+    const keys = Object.keys(sample);
+    return keys.filter(k=>/(_s$|_sec|_seconds|duration|elapsed|latency)/i.test(k) && typeof sample[k]==='number');
+  }
+
+  function parseJSONL(text){
+    const lines = text.split('\n');
+    const out = [];
+    let errCount = 0;
+    lines.forEach(line=>{
+      const t = line.trim();
+      if(!t) return;
+      try{ out.push(JSON.parse(t)); }
+      catch(e){ errCount++; }
+    });
+    return {rows: out, errCount};
+  }
+
+  function enrich(rawRows){
+    // sort by explicit step if present, else keep file order
+    const rows = rawRows.map((r,i)=>({...r, __i:i}));
+    if(rows.every(r=>typeof r.step === 'number')){
+      rows.sort((a,b)=>a.step-b.step);
+    }
+    rows.forEach((r,idx)=>{
+      r.node = r.node || r.name || r.type || 'unknown';
+      r.turn = (r.turn===undefined || r.turn===null) ? 'n/a' : r.turn;
+      r.step = (r.step===undefined) ? idx+1 : r.step;
+      r.node_s = typeof r.node_s === 'number' ? r.node_s : 0;
+      r.sync_s = typeof r.sync_s === 'number' ? r.sync_s : 0;
+      r.total_s = r.node_s + r.sync_s;
+      r._ts = r.at ? Date.parse(r.at) : null;
+      r._keys = Array.isArray(r.keys) ? r.keys : [];
+    });
+    const t0 = rows.find(r=>r._ts!=null);
+    const startTs = t0 ? t0._ts : 0;
+    rows.forEach((r,idx)=>{
+      r._elapsed = r._ts!=null ? (r._ts - startTs)/1000 : idx; // seconds from start, fallback = index
+      r._start = r._ts!=null ? r._elapsed - r.total_s : null;
+      if(idx>0 && rows[idx-1]._ts!=null && r._ts!=null){
+        const realGap = (r._ts - rows[idx-1]._ts)/1000;
+        r._gap = realGap - r.total_s;
+      } else {
+        r._gap = null;
+      }
+    });
+    return rows;
+  }
+
+  function aggregateNodes(rows){
+    const map = new Map();
+    rows.forEach(r=>{
+      if(!map.has(r.node)) map.set(r.node, {node:r.node, count:0, sumNode:0, sumSync:0, maxNode:0, values:[]});
+      const e = map.get(r.node);
+      e.count++; e.sumNode+=r.node_s; e.sumSync+=r.sync_s; e.maxNode=Math.max(e.maxNode,r.node_s);
+      e.values.push(r.node_s);
+    });
+    map.forEach(e=>{
+      const n = e.values.length;
+      const mean = e.sumNode/n;
+      const variance = e.values.reduce((a,v)=>a+(v-mean)**2,0)/Math.max(n,1);
+      e.mean = mean; e.std = Math.sqrt(variance);
+    });
+    return Array.from(map.values()).sort((a,b)=>b.sumNode-a.sumNode);
+  }
+
+  function flagOutlier(row, nodestats){
+    const stat = nodestats.find(s=>s.node===row.node);
+    if(!stat || stat.std===0 || stat.count<3) return null;
+    const z = (row.node_s - stat.mean)/stat.std;
+    if(z>2.5) return 'critical';
+    if(z>1.3) return 'elevated';
+    return null;
+  }
+
+  function groupTurns(rows){
+    const map = new Map();
+    rows.forEach(r=>{
+      if(!map.has(r.turn)) map.set(r.turn, []);
+      map.get(r.turn).push(r);
+    });
+    return Array.from(map.entries()).map(([turn, steps])=>{
+      const sumTotal = steps.reduce((a,s)=>a+s.total_s,0);
+      const start = Math.min(...steps.map(s=>s._start ?? s._elapsed));
+      const end = Math.max(...steps.map(s=>s._elapsed));
+      return {turn, steps, sumTotal, start, end};
+    });
+  }
+
+  function render(rows){
+    ROWS = rows;
+    NODESTATS = aggregateNodes(rows);
+    TURNS = groupTurns(rows);
+    renderStats(rows);
+    renderCostChart(NODESTATS);
+    renderWaterfall(TURNS, rows);
+    renderLegend();
+    populateNodeFilter(NODESTATS);
+    renderTable();
+  }
+
+  function renderStats(rows){
+    const totalNode = rows.reduce((a,r)=>a+r.node_s,0);
+    const totalSync = rows.reduce((a,r)=>a+r.sync_s,0);
+    const withTs = rows.filter(r=>r._ts!=null);
+    const wallTime = withTs.length>1 ? (withTs[withTs.length-1]._ts - withTs[0]._ts)/1000 : null;
+    const turnsN = new Set(rows.map(r=>r.turn)).size;
+    const untracked = rows.reduce((a,r)=> a + (r._gap && r._gap>0 ? r._gap : 0), 0);
+    const slow = rows.slice().sort((a,b)=>b.node_s-a.node_s)[0];
+    const outliers = rows.filter(r=>flagOutlier(r,NODESTATS));
+
+    const cards = [
+      {label:'Wall time', value: wallTime!=null? fmtT(wallTime): '—', sub: rows.length+' steps'},
+      {label:'Sum node_s', value: fmtT(totalNode), sub: wallTime? fmt(100*totalNode/wallTime,0)+'% of wall time': ''},
+      {label:'Sum sync_s', value: fmtT(totalSync), sub: ''},
+      {label:'Untracked gap', value: fmtT(untracked), cls: untracked>10?'warn':'', sub:'time between logs not in node_s+sync_s'},
+      {label:'Turns', value: turnsN, sub: fmt(rows.length/Math.max(turnsN,1),1)+' steps/turn avg'},
+      {label:'Slowest step', value: slow? fmt(slow.node_s,1)+'s':'—', cls:'crit', sub: slow? '#'+slow.step+' · '+slow.node : ''},
+      {label:'Outlier steps', value: outliers.length, cls: outliers.length? 'warn':'', sub:'z-score > 1.3 within node type'},
+    ];
+    $('#stats').innerHTML = cards.map(c=>`
+      <div class="stat">
+        <div class="label">${c.label}</div>
+        <div class="value ${c.cls||''}">${c.value}</div>
+        <div class="sub">${c.sub||''}</div>
+      </div>`).join('');
+  }
+
+  function renderCostChart(nodestats){
+    const max = Math.max(...nodestats.map(n=>n.sumNode+n.sumSync), 0.001);
+    $('#costchart').innerHTML = nodestats.map(n=>{
+      const col = colorFor(n.node);
+      const wNode = 100*n.sumNode/max;
+      const wSync = 100*n.sumSync/max;
+      return `<div class="cost-row">
+        <div class="name"><i style="background:${col}"></i>${n.node}</div>
+        <div class="track">
+          <div class="fill" style="width:${wNode}%;background:${col}"></div>
+          <div class="fill sync" style="left:${wNode}%;width:${wSync}%;background:${col}"></div>
+        </div>
+        <div class="nums"><b>${fmtT(n.sumNode)}</b> · ${n.count}× · avg ${fmt(n.mean,2)}s</div>
+      </div>`;
+    }).join('');
+  }
+
+  function renderLegend(){
+    $('#wf-legend').innerHTML = Array.from(nodeColor.entries()).map(([node,col])=>
+      `<span><i style="background:${col}"></i>${node}</span>`
+    ).join('') + `<span><i style="background:transparent;border:1.5px solid var(--warn);"></i>elevated (z&gt;1.3)</span><span><i style="background:transparent;border:1.5px solid var(--crit);"></i>critical (z&gt;2.5)</span>`;
+  }
+
+  function renderWaterfall(turns, allRows){
+    const globalMax = Math.max(...turns.map(t=>t.sumTotal), 0.5);
+    // axis ticks every ~10 units, scaled to nice steps
+    const stepSize = niceStep(globalMax);
+    const ticks = [];
+    for(let v=0; v<=globalMax*1.05; v+=stepSize) ticks.push(v);
+    $('#wf-ticks').innerHTML = ticks.map(v=>{
+      const pct = 100*v/(globalMax*1.05);
+      return `<div class="tick" style="left:${pct}%">${fmt(v,0)}s</div>`;
+    }).join('');
+
+    $('#wf-body').innerHTML = turns.map(t=>{
+      let cursor = 0;
+      const segs = t.steps.map(s=>{
+        const w = Math.max(100*s.total_s/(globalMax*1.05), 0.35);
+        const left = 100*cursor/(globalMax*1.05);
+        cursor += s.total_s;
+        const flag = flagOutlier(s, NODESTATS);
+        const col = colorFor(s.node);
+        return `<div class="seg ${flag||''}" data-i="${s.__i}" style="left:${left}%;width:${w}%;background:${col}"
+          title="${s.node} · step ${s.step} · ${fmt(s.node_s,2)}s"></div>`;
+      }).join('');
+      return `<div class="wf-row">
+        <div class="rowlabel"><b>turn ${t.turn}</b><span>${t.steps.length} steps</span></div>
+        <div class="track">${segs}<span class="turn-total">${fmt(t.sumTotal,1)}s</span></div>
+      </div>`;
+    }).join('');
+
+    $$('.seg').forEach(el=>{
+      el.addEventListener('click', ()=> openDrawer(ROWS[+el.dataset.i]));
+    });
+  }
+
+  function niceStep(max){
+    const raw = max/8;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw||1)));
+    const norm = raw/mag;
+    let step;
+    if(norm<1.5) step=1; else if(norm<3.5) step=2; else if(norm<7.5) step=5; else step=10;
+    return step*mag;
+  }
+
+  function populateNodeFilter(nodestats){
+    const sel = $('#tbl-node-filter');
+    sel.innerHTML = '<option value="">all nodes</option>' + nodestats.map(n=>`<option value="${n.node}">${n.node}</option>`).join('');
+  }
+
+  function renderTable(){
+    const search = $('#tbl-search').value.toLowerCase();
+    const nodeFilter = $('#tbl-node-filter').value;
+    let rows = ROWS.filter(r=>{
+      if(nodeFilter && r.node!==nodeFilter) return false;
+      if(!search) return true;
+      const hay = (r.node+' '+r.turn+' '+r._keys.join(' ')).toLowerCase();
+      return hay.includes(search);
+    });
+    rows = rows.slice().sort((a,b)=>{
+      let av=a[sortKey], bv=b[sortKey];
+      if(sortKey==='keys'){ av=a._keys.length; bv=b._keys.length; }
+      if(sortKey==='gap_s'){ av=a._gap; bv=b._gap; }
+      if(sortKey==='at'){ av=a._ts; bv=b._ts; }
+      if(av==null) av = -Infinity;
+      if(bv==null) bv = -Infinity;
+      if(typeof av==='string') return av.localeCompare(bv)*sortDir;
+      return (av-bv)*sortDir;
+    });
+
+    $('#tbl-body').innerHTML = rows.map(r=>{
+      const flag = flagOutlier(r, NODESTATS);
+      const nodeCls = flag==='critical' ? 'crit' : flag==='elevated' ? 'warn' : '';
+      const gapCls = (r._gap!=null && r._gap>2) ? 'warn' : (r._gap!=null && r._gap>8 ? 'crit':'');
+      return `<tr data-i="${r.__i}">
+        <td class="num">${r.step}</td>
+        <td class="num">${r.turn}</td>
+        <td><span class="pill" style="background:${colorFor(r.node)}22;color:${colorFor(r.node)}"><i style="background:${colorFor(r.node)}"></i>${r.node}</span></td>
+        <td class="num">${r.at ? r.at.replace('T',' ').replace(/\+.*/,'') : '—'}</td>
+        <td class="num ${nodeCls}">${fmt(r.node_s,3)}</td>
+        <td class="num">${fmt(r.sync_s,3)}</td>
+        <td class="num ${gapCls}">${r._gap!=null ? fmt(r._gap,2) : '—'}</td>
+        <td class="keys">${r._keys.slice(0,4).join(', ')}${r._keys.length>4?' +'+(r._keys.length-4):''}</td>
+      </tr>`;
+    }).join('');
+
+    $$('#tbl-body tr').forEach(tr=>{
+      tr.addEventListener('click', ()=> openDrawer(ROWS[+tr.dataset.i]));
+    });
+  }
+
+  function openDrawer(row){
+    if(!row) return;
+    $('#d-title').textContent = row.node+'  ·  step '+row.step;
+    $('#d-sub').textContent = 'turn '+row.turn + (row.at ? '  ·  '+row.at : '');
+    const flag = flagOutlier(row, NODESTATS);
+    $('#d-metrics').innerHTML = `
+      <div class="m"><div class="l">node_s</div><div class="v" style="color:${flag==='critical'?'var(--crit)':flag==='elevated'?'var(--warn)':'var(--text)'}">${fmt(row.node_s,3)}s</div></div>
+      <div class="m"><div class="l">sync_s</div><div class="v">${fmt(row.sync_s,3)}s</div></div>
+      <div class="m"><div class="l">gap (untracked)</div><div class="v" style="color:${row._gap>5?'var(--crit)':row._gap>1.5?'var(--warn)':'var(--text)'}">${row._gap!=null?fmt(row._gap,2)+'s':'—'}</div></div>
+      <div class="m"><div class="l">status</div><div class="v" style="font-size:12px;color:${flag==='critical'?'var(--crit)':flag==='elevated'?'var(--warn)':'var(--accent)'}">${flag ? flag+' outlier' : 'normal'}</div></div>
+    `;
+    const {__i, _ts, _elapsed, _start, _gap, _keys, ...clean} = row;
+    $('#d-raw').textContent = JSON.stringify(clean, null, 2);
+    $('#overlay').classList.add('open');
+    $('#drawer').classList.add('open');
+  }
+  function closeDrawer(){
+    $('#overlay').classList.remove('open');
+    $('#drawer').classList.remove('open');
+  }
+  $('#overlay').addEventListener('click', closeDrawer);
+  $('#d-close').addEventListener('click', closeDrawer);
+
+  // ---- sorting ----
+  $$('thead th').forEach(th=>{
+    th.addEventListener('click', ()=>{
+      const k = th.dataset.k;
+      if(sortKey===k) sortDir*=-1; else { sortKey=k; sortDir=1; }
+      renderTable();
+    });
+  });
+  $('#tbl-search').addEventListener('input', renderTable);
+  $('#tbl-node-filter').addEventListener('change', renderTable);
+
+  // ---- loading ----
+  function loadText(text, label){
+    const {rows, errCount} = parseJSONL(text);
+    if(rows.length===0){
+      $('#drop-status').textContent = 'no valid JSON lines found';
+      return;
+    }
+    nodeColor.clear();
+    const enriched = enrich(rows);
+    render(enriched);
+    $('#drop-status').textContent = label + ' · ' + rows.length + ' lines' + (errCount? ' · '+errCount+' skipped (parse error)':'');
+    $('#paste-panel').style.display = 'none';
+  }
+
+  $('#btn-upload').addEventListener('click', ()=> $('#file-input').click());
+  $('#file-input').addEventListener('change', (e)=>{
+    const f = e.target.files[0];
+    if(!f) return;
+    const reader = new FileReader();
+    reader.onload = ()=> loadText(reader.result, f.name);
+    reader.readAsText(f);
+  });
+  document.addEventListener('dragover', e=>e.preventDefault());
+  document.addEventListener('drop', e=>{
+    e.preventDefault();
+    const f = e.dataTransfer.files[0];
+    if(!f) return;
+    const reader = new FileReader();
+    reader.onload = ()=> loadText(reader.result, f.name);
+    reader.readAsText(f);
+  });
+  $('#btn-paste').addEventListener('click', ()=>{
+    const p = $('#paste-panel');
+    p.style.display = p.style.display==='none' ? 'block' : 'none';
+  });
+  $('#btn-paste-load').addEventListener('click', ()=>{
+    const text = $('#paste-area').value;
+    if(text.trim()) loadText(text, 'pasted data');
+  });
+
+  // ---- init with embedded demo ----
+  const demoText = $('#demo-data').textContent;
+  loadText(demoText, 'demo trace');
+})();
+</script>
+
+</body>
+</html>

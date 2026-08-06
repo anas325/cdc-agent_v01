@@ -1,0 +1,54 @@
+{
+  "case_id": "cdc_009_reservation_salles",
+  "title": "Réservation des salles de réunion",
+  "dataset_version": "v1",
+  "annotator": "équipe CDC (relecture experte)",
+  "notes": "TÉMOIN NÉGATIF. Ce CDC est délibérément bien écrit : objectif mesuré, rôles tabulés, règles de gestion numérotées, critères d'acceptation par fonctionnalité, cas limites tranchés, NFR chiffrées, hors périmètre explicite. Seules trois lacunes réelles subsistent, toutes nice_to_have ou important, et aucune contradiction. Un système qui produit ici autant de lacunes que sur cdc_003 sur-signale : c'est exactement ce que ce cas doit rendre visible, et la précision mesurée dessus en Phase 4 pèse plus que le rappel.",
+  "gaps": [
+    {
+      "id": "GT-GAP-001",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "important",
+      "description": "La règle de no-show (RG06) ne dit pas comment une réservation est « confirmée » : ni le geste attendu, ni par qui.",
+      "keywords": ["confirmation", "no-show"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-002",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "important",
+      "description": "La synchronisation vers Exchange est unidirectionnelle sans définir le comportement si l'API Graph est indisponible ou rejette l'écriture.",
+      "keywords": ["exchange", "graph", "indisponible"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-003",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "nice_to_have",
+      "description": "Le « droit prioritaire des assistant(e)s sur les salles de direction » est annoncé dans les rôles mais n'est traduit par aucune règle de gestion.",
+      "keywords": ["prioritaire", "direction"],
+      "resolvable_by": "human"
+    }
+  ],
+  "contradictions": [],
+  "expected_answers": [
+    {
+      "gap_ref": "GT-GAP-001",
+      "answer": "L'organisateur confirme depuis l'écran de la salle ou depuis l'application, d'un clic, entre 15 minutes avant et 10 minutes après l'heure de début. Un(e) assistant(e) peut confirmer à sa place.",
+      "keywords": ["confirmation", "organisateur"]
+    },
+    {
+      "gap_ref": "GT-GAP-002",
+      "answer": "La réservation reste valide dans l'application si Exchange est indisponible : l'écriture est rejouée toutes les cinq minutes pendant 24 heures, puis signalée aux services généraux.",
+      "keywords": ["exchange", "rejouee"]
+    },
+    {
+      "gap_ref": "GT-GAP-003",
+      "answer": "Un(e) assistant(e) de direction peut préempter une salle de direction jusqu'à 24 heures avant le créneau : la réservation existante est annulée et son organisateur notifié avec proposition d'une salle équivalente.",
+      "keywords": ["prioritaire", "salle de direction"]
+    }
+  ]
+}

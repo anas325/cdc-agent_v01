@@ -1,0 +1,32 @@
+# Synthetic stakeholder for cdc_002_ticketing.
+#
+# Deliberately narrow: the annexes already answer most of the CDC's open points,
+# so this profile only knows the handful of things no reference document covers.
+# If the simulator answers more than that, RAG is being credited for work it
+# didn't do.
+
+name: "Responsable IT interne"
+role: "Product Owner"
+
+knowledge:
+  - "La base PostgreSQL est sauvegardée quotidiennement et conservée 30 jours, avec une restauration testée chaque trimestre."
+  - "Une indisponibilité d'une demi-journée est tolérable pour cet outil interne."
+  - "La date ferme de livraison est le 30 septembre, fin du trimestre ; les lots peuvent être réordonnés mais pas décalés."
+  - "Le délai moyen se mesure entre la création du ticket et son passage en « Résolu », en moyenne glissante sur 30 jours ouvrés."
+  - "La référence de 3 jours vient de l'historique du fichier Excel actuellement utilisé."
+
+unknown:
+  - "Le détail des schémas d'API et des codes d'erreur"
+  - "Les règles de gestion détaillées et les cas limites (elles sont dans les annexes)"
+  - "La matrice de permissions par rôle"
+  - "Le budget alloué au projet"
+  - "La stratégie d'authentification à long terme (SSO ou non)"
+
+behavior:
+  style: precise
+  unknown_rate: 0.0
+  allow_contradictions: false
+
+contradictions:
+  - "Finalement les délais de 4h et 3 jours sont bien des délais calendaires, week-ends compris."
+  - "L'intégration Active Directory fait finalement partie de la v1."

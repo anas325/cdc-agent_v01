@@ -18,7 +18,7 @@ from typing import TypeVar
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
 
-from src import llm_cache, telemetry
+from src import llm_cache, prompts, telemetry
 from src.config import LLMSettings, load_settings
 
 T = TypeVar("T", bound=BaseModel)
@@ -50,6 +50,11 @@ def get_llm() -> BaseChatModel:
     return _build_llm(settings.llm)
 
 
+def current_model_name() -> str:
+    """The configured chat model id, for stamping onto audit records."""
+    return load_settings().llm.model
+
+
 @lru_cache(maxsize=1)
 def _get_structured_llm() -> BaseChatModel:
     """A JSON-mode variant used only by call_structured, where supported (Ollama)."""
@@ -75,7 +80,14 @@ class StructuredCallError(RuntimeError):
     pass
 
 
-def call_structured(prompt: str, model: type[T], llm: BaseChatModel | None = None, max_retries: int = 2) -> T:
+def call_structured(
+    prompt: str,
+    model: type[T],
+    llm: BaseChatModel | None = None,
+    max_retries: int = 2,
+    *,
+    prompt_id: str | None = None,
+) -> T:
     """Ask the LLM for JSON matching `model`'s schema and parse it robustly.
 
     Works across providers (small local Ollama models rarely support reliable
@@ -83,8 +95,13 @@ def call_structured(prompt: str, model: type[T], llm: BaseChatModel | None = Non
     mode where available, repairing common formatting issues (code fences,
     leading prose), and retrying on parse failure with the error fed back to
     the model.
+
+    `prompt_id` names the prompt in src/prompts.py; its version is recorded in
+    telemetry and folded into the cache key so a prompt edit invalidates stale
+    cached answers.
     """
     llm = llm or _get_structured_llm()
+    prompt_version = prompts.version(prompt_id)
     schema = model.model_json_schema()
     base_prompt = (
         f"{prompt}\n\n"
@@ -111,6 +128,7 @@ def call_structured(prompt: str, model: type[T], llm: BaseChatModel | None = Non
             provider=settings.llm.provider,
             model=settings.llm.model,
             schema_name=model.__name__,
+            prompt_version=prompt_version,
         )
     try:
         if cache_key is not None:
@@ -153,6 +171,8 @@ def call_structured(prompt: str, model: type[T], llm: BaseChatModel | None = Non
         telemetry.record_llm(
             schema=model.__name__,
             model=load_settings().llm.model,
+            prompt_id=prompt_id,
+            prompt_version=prompt_version,
             duration_s=time.perf_counter() - started_at,
             attempts=attempts,
             ok=ok,

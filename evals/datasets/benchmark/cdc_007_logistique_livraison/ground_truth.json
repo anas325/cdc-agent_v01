@@ -1,0 +1,211 @@
+{
+  "case_id": "cdc_007_logistique_livraison",
+  "title": "Suivi des livraisons du dernier kilomètre",
+  "dataset_version": "v1",
+  "annotator": "équipe CDC (relecture experte)",
+  "notes": "Cas de stress pour la détection de contradictions : huit incohérences internes explicites, dont plusieurs au sein d'une même section (F2, F3, disponibilité, budget) et deux entre sections éloignées (offline vs enregistrement immédiat, cloud public vs données qui ne quittent pas le datacenter). Sert à mesurer le rappel du critic sans dépendre de la finesse du gap finder.",
+  "gaps": [
+    {
+      "id": "GT-GAP-001",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "blocking",
+      "description": "Le mode hors connexion n'est pas spécifié : opérations autorisées, durée de rétention locale, résolution des conflits à la resynchronisation.",
+      "keywords": ["hors connexion", "synchronisation"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-002",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "Le dépôt chez un commerçant partenaire n'a aucune règle : accord du destinataire, distance maximale, durée de garde, responsabilité.",
+      "keywords": ["commercant", "depot"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-003",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "important",
+      "description": "Le retour en agence ne dit rien du nombre de nouvelles présentations ni du délai avant retour à l'expéditeur.",
+      "keywords": ["retour", "agence", "presentation"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-004",
+      "section_id": "functional",
+      "category": "data_model",
+      "severity": "important",
+      "description": "La preuve de livraison n'est pas modélisée : signature, photo, horodatage, position, valeur juridique et conservation.",
+      "keywords": ["preuve", "signature"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-005",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "blocking",
+      "description": "Le RGPD est invoqué sans base légale, sans information des chauffeurs, ni limitation de la géolocalisation aux heures de service.",
+      "keywords": ["rgpd", "geolocalisation", "chauffeur"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-006",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "blocking",
+      "description": "Les échanges avec le système de planification et le système de suivi client n'ont ni protocole, ni fréquence, ni contrat.",
+      "keywords": ["planification", "suivi client", "integration"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-007",
+      "section_id": "technical",
+      "category": "data_model",
+      "severity": "important",
+      "description": "La livraison est décrite en trois champs : ni destinataire, ni créneau, ni tournée, ni historique de statut.",
+      "keywords": ["livraison", "champs", "statut"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-008",
+      "section_id": "functional",
+      "category": "acceptance_criteria",
+      "severity": "important",
+      "description": "Aucun critère d'acceptation sur la visibilité temps réel promise au service client.",
+      "keywords": ["critere", "acceptation"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-009",
+      "section_id": "problem",
+      "category": "functional_ambiguity",
+      "severity": "nice_to_have",
+      "description": "L'objectif de visibilité n'est pas mesuré : aucun indicateur sur les appels au service client évités.",
+      "keywords": ["visibilite", "indicateur"],
+      "resolvable_by": "human"
+    }
+  ],
+  "contradictions": [
+    {
+      "id": "GT-CON-001",
+      "statement_a": "Le projet doit couvrir l'ensemble des 45 véhicules dès la mise en service",
+      "statement_b": "Le déploiement se fera progressivement, en commençant par 5 véhicules",
+      "section_ids": ["problem"],
+      "severity": "blocking",
+      "keywords": ["45", "progressivement"]
+    },
+    {
+      "id": "GT-CON-002",
+      "statement_a": "L'application fonctionne sans connexion réseau",
+      "statement_b": "Toutes les actions du chauffeur sont enregistrées immédiatement sur le serveur central",
+      "section_ids": ["functional"],
+      "severity": "blocking",
+      "keywords": ["sans connexion", "immediatement"]
+    },
+    {
+      "id": "GT-CON-003",
+      "statement_a": "La position des véhicules est remontée toutes les 30 secondes",
+      "statement_b": "Pour préserver la batterie, la position est remontée toutes les 10 minutes",
+      "section_ids": ["functional"],
+      "severity": "blocking",
+      "keywords": ["30 secondes", "10 minutes"]
+    },
+    {
+      "id": "GT-CON-004",
+      "statement_a": "Le créneau de livraison est d'une heure",
+      "statement_b": "Un créneau de deux heures est communiqué au destinataire la veille",
+      "section_ids": ["functional"],
+      "severity": "important",
+      "keywords": ["creneau", "heure"]
+    },
+    {
+      "id": "GT-CON-005",
+      "statement_a": "Backend hébergé sur le cloud public",
+      "statement_b": "Les données de géolocalisation ne quittent jamais le datacenter de la filiale",
+      "section_ids": ["technical"],
+      "severity": "blocking",
+      "keywords": ["cloud public", "datacenter"]
+    },
+    {
+      "id": "GT-CON-006",
+      "statement_a": "Le tableau dispatch doit afficher la position en moins de 2 secondes",
+      "statement_b": "Le rafraîchissement du tableau dispatch est effectué toutes les 5 minutes",
+      "section_ids": ["technical"],
+      "severity": "important",
+      "keywords": ["2 secondes", "5 minutes"]
+    },
+    {
+      "id": "GT-CON-007",
+      "statement_a": "Le service doit être disponible 24h/24",
+      "statement_b": "Une interruption de service est prévue chaque nuit entre 1h et 4h",
+      "section_ids": ["technical"],
+      "severity": "important",
+      "keywords": ["24h", "interruption"]
+    },
+    {
+      "id": "GT-CON-008",
+      "statement_a": "Budget d'investissement : 320 000 €",
+      "statement_b": "Le coût total du projet ne doit pas dépasser 200 000 €",
+      "section_ids": ["constraints"],
+      "severity": "blocking",
+      "keywords": ["320 000", "200 000"]
+    },
+    {
+      "id": "GT-CON-009",
+      "statement_a": "Les données de géolocalisation des chauffeurs sont soumises au RGPD",
+      "statement_b": "Les positions sont conservées trois ans pour analyse",
+      "section_ids": ["constraints"],
+      "severity": "blocking",
+      "keywords": ["rgpd", "trois ans"]
+    }
+  ],
+  "expected_answers": [
+    {
+      "gap_ref": "GT-GAP-001",
+      "answer": "Hors connexion, le chauffeur consulte sa tournée et déclare ses livraisons ; les déclarations sont mises en file locale et synchronisées dès le retour du réseau, au maximum sous 12 heures. En cas de conflit, la déclaration du chauffeur prime.",
+      "keywords": ["hors connexion", "file"]
+    },
+    {
+      "gap_ref": "GT-GAP-002",
+      "answer": "Le dépôt chez un commerçant n'est possible que si le destinataire l'a accepté à la commande, chez un partenaire à moins de 500 mètres, avec une garde de sept jours ; la responsabilité passe au commerçant à la remise.",
+      "keywords": ["commercant", "sept jours"]
+    },
+    {
+      "gap_ref": "GT-GAP-003",
+      "answer": "Deux nouvelles présentations sont proposées ; après le troisième échec, le colis repart chez l'expéditeur sous cinq jours ouvrés.",
+      "keywords": ["presentation", "expediteur"]
+    },
+    {
+      "gap_ref": "GT-GAP-004",
+      "answer": "La preuve de livraison associe la signature manuscrite ou le nom du réceptionnaire, l'horodatage, la position du véhicule et, en cas de dépôt, une photo. Elle est conservée deux ans.",
+      "keywords": ["preuve", "horodatage"]
+    },
+    {
+      "gap_ref": "GT-GAP-005",
+      "answer": "La géolocalisation n'est active que pendant les heures de service, sur la base de l'intérêt légitime, avec information des chauffeurs et des représentants du personnel. Les positions sont anonymisées au bout de 60 jours.",
+      "keywords": ["geolocalisation", "heures de service"]
+    },
+    {
+      "gap_ref": "GT-GAP-006",
+      "answer": "Les tournées sont reçues du système de planification chaque matin à 5h par fichier, et les statuts de livraison sont poussés vers le suivi client à chaque changement, par API REST.",
+      "keywords": ["tournee", "statut"]
+    },
+    {
+      "gap_ref": "GT-GAP-007",
+      "answer": "Une livraison porte le colis, le destinataire et son contact, l'adresse, le créneau promis, la tournée, le chauffeur et l'historique complet des statuts avec horodatage.",
+      "keywords": ["livraison", "creneau"]
+    },
+    {
+      "gap_ref": "GT-GAP-008",
+      "answer": "Le projet est accepté si le service client retrouve la position d'un colis en moins de 30 secondes sans appeler le dispatcheur, sur 95 % des demandes.",
+      "keywords": ["service client", "position"]
+    },
+    {
+      "gap_ref": "GT-GAP-009",
+      "answer": "La cible est de diviser par deux les appels entrants « où est mon colis » au service client dans les six mois.",
+      "keywords": ["appels", "service client"]
+    }
+  ]
+}

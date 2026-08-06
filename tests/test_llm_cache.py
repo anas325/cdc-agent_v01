@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
+from src import prompts
 from src.ids import stable_id
 from src.llm import call_structured
 
@@ -70,6 +71,28 @@ def test_different_prompts_do_not_share_an_entry(monkeypatch, cache_dir):
     call_structured("prompt B", Answer, llm=llm)
 
     assert llm.calls == 2
+
+
+def test_bumping_a_prompt_version_invalidates_its_cached_answer(monkeypatch, cache_dir):
+    """Otherwise an edited prompt silently replays results from the old wording."""
+    monkeypatch.setenv("CDC_LLM_CACHE", "1")
+    monkeypatch.setitem(prompts.PROMPT_VERSIONS, "gap_filler.question", "v1")
+    llm = CountingLLM()
+
+    call_structured("prompt A", Answer, llm=llm, prompt_id="gap_filler.question")
+    call_structured("prompt A", Answer, llm=llm, prompt_id="gap_filler.question")
+    assert llm.calls == 1
+
+    monkeypatch.setitem(prompts.PROMPT_VERSIONS, "gap_filler.question", "v2")
+    call_structured("prompt A", Answer, llm=llm, prompt_id="gap_filler.question")
+
+    assert llm.calls == 2
+
+
+def test_an_unregistered_prompt_id_is_rejected():
+    """A typo must fail loudly rather than produce unversioned audit records."""
+    with pytest.raises(prompts.UnknownPromptError):
+        call_structured("prompt A", Answer, llm=CountingLLM(), prompt_id="nope.not_a_prompt")
 
 
 def test_corrupt_entry_falls_through_to_a_live_call(monkeypatch, cache_dir):

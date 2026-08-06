@@ -1,0 +1,38 @@
+# Synthetic stakeholder for cdc_004_rh_onboarding.
+#
+# Non-zero unknown_rate: an HR manager pulled into a spec review genuinely
+# hedges. This is the case that exercises the assumption path even in
+# `--mode stakeholder`, not only under `--mode realistic`.
+
+name: "Responsable RH groupe"
+role: "Business Owner"
+
+knowledge:
+  - "Le dossier porte l'entité juridique, le type de contrat, l'intitulé de poste, le site d'affectation et le statut cadre ou non cadre."
+  - "La liste des tâches est déduite de l'entité, du site et du poste, à partir d'un modèle maintenu par les RH."
+  - "Le manager peut cocher des tâches optionnelles en plus du modèle."
+  - "Les documents attendus sont la pièce d'identité, le RIB, la carte vitale et le justificatif de domicile, en PDF ou image de moins de 5 Mo."
+  - "Les documents administratifs sont conservés cinq ans après la sortie du collaborateur, puis purgés."
+  - "Seuls les RH de l'entité concernée et le manager direct accèdent au dossier complet."
+  - "L'IT et les services généraux ne voient que leurs propres tâches, sans les documents administratifs."
+  - "Chaque consultation d'un document administratif est tracée."
+  - "Les tâches IT et badge doivent être terminées cinq jours ouvrés avant l'arrivée, les autres la veille."
+  - "Une relance part au service responsable à J-3 de l'échéance, puis chaque jour, avec copie au manager après la deuxième relance."
+  - "Les RH vérifient la lisibilité et la validité de chaque document ; un refus déclenche une demande de nouveau dépôt avec motif."
+  - "Le SIRH est la source de vérité et pousse les nouveaux contrats chaque nuit ; le portail crée un ticket par demande d'équipement."
+  - "Il y a environ 300 dossiers par an, avec un pic de 40 arrivées début septembre et 50 utilisateurs simultanés."
+  - "Aujourd'hui un quart des arrivées connaît au moins un oubli d'équipement ; la cible est moins de 5 % à six mois."
+
+unknown:
+  - "Les cibles de temps de réponse du portail"
+  - "Les critères d'acceptation détaillés"
+  - "Le comportement attendu quand la date d'arrivée avance brutalement"
+
+behavior:
+  style: precise
+  unknown_rate: 0.1
+  allow_contradictions: false
+
+contradictions:
+  - "Finalement les managers ont aussi accès aux documents administratifs de leurs collaborateurs."
+  - "Les documents ne sont conservés que le temps de l'intégration, puis supprimés."

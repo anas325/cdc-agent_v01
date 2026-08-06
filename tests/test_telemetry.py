@@ -224,7 +224,7 @@ def test_telemetry_records_the_real_graph_across_an_interrupt(monkeypatch):
     # Resuming re-enters human_input and keeps appending rather than resetting.
     # The tail of the run is open-ended (it loops until max_turns), so swap the
     # scripted queue for a fake that always yields an empty, terminating answer.
-    def quiet(prompt, model, llm=None, max_retries=2):
+    def quiet(prompt, model, llm=None, max_retries=2, *, prompt_id=None):
         return {"GapFinderOutput": GapFinderOutput, "CriticOutput": CriticOutput}.get(
             model.__name__, model
         )()

@@ -1,0 +1,175 @@
+{
+  "case_id": "cdc_004_rh_onboarding",
+  "title": "Portail d'intégration des nouveaux collaborateurs",
+  "dataset_version": "v1",
+  "annotator": "équipe CDC (relecture experte)",
+  "notes": "Cas centré sur le modèle de données et les rôles : le CDC décrit un dossier d'intégration en quatre champs alors qu'il porte des données RH sensibles sur quatre entités juridiques. Aucun document de référence — tout passe par la partie prenante. Sert aussi à vérifier que le système repère l'absence totale d'exigence de rétention malgré des données personnelles.",
+  "gaps": [
+    {
+      "id": "GT-GAP-001",
+      "section_id": "technical",
+      "category": "data_model",
+      "severity": "blocking",
+      "description": "Le dossier d'intégration se limite à quatre champs : ni entité juridique, ni contrat, ni poste, ni site d'affectation, alors que les tâches en dépendent.",
+      "keywords": ["dossier", "champs", "entite"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-002",
+      "section_id": "technical",
+      "category": "data_model",
+      "severity": "blocking",
+      "description": "Les documents administratifs déposés ne sont pas modélisés : types attendus, format, durée de conservation, caractère obligatoire.",
+      "keywords": ["document", "conservation"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-003",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "blocking",
+      "description": "« Les données RH sont confidentielles » et « l'accès est restreint aux personnes autorisées » : aucune règle de contrôle d'accès, de chiffrement ni de RGPD.",
+      "keywords": ["confidentiel", "acces", "rgpd"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-004",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "« Les tâches doivent être terminées à temps » : ni échéance par type de tâche, ni définition du retard.",
+      "keywords": ["tache", "echeance", "retard"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-005",
+      "section_id": "functional",
+      "category": "business_rule",
+      "severity": "blocking",
+      "description": "La génération automatique des tâches ne dit pas de quoi dépend la liste produite ni qui la maintient.",
+      "keywords": ["generation", "tache"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-006",
+      "section_id": "functional",
+      "category": "edge_case",
+      "severity": "important",
+      "description": "« Si la date d'arrivée change, les tâches sont recalculées » : comportement indéfini pour les tâches déjà terminées ou déjà en retard.",
+      "keywords": ["date d'arrivee", "recalcul"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-007",
+      "section_id": "functional",
+      "category": "functional_ambiguity",
+      "severity": "important",
+      "description": "« Une relance est envoyée si nécessaire » : déclencheur, destinataire et fréquence non définis.",
+      "keywords": ["relance"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-008",
+      "section_id": "functional",
+      "category": "functional_ambiguity",
+      "severity": "important",
+      "description": "« Les documents sont vérifiés » sans dire par qui, selon quels critères, ni ce qui se passe en cas de refus.",
+      "keywords": ["verification", "document"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-009",
+      "section_id": "technical",
+      "category": "integration",
+      "severity": "blocking",
+      "description": "Les échanges avec le SIRH et l'outil de ticketing IT n'ont ni sens, ni fréquence, ni contrat d'interface.",
+      "keywords": ["sirh", "ticketing", "integration"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-010",
+      "section_id": "technical",
+      "category": "nfr",
+      "severity": "important",
+      "description": "« Le portail doit rester fluide » : aucune cible de temps de réponse ni volumétrie (300 arrivées par an, pics de rentrée).",
+      "keywords": ["fluide", "temps de reponse"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-011",
+      "section_id": "functional",
+      "category": "acceptance_criteria",
+      "severity": "important",
+      "description": "Aucun critère d'acceptation, notamment sur l'objectif « supprimer les oublis d'équipement ».",
+      "keywords": ["critere", "acceptation"],
+      "resolvable_by": "human"
+    },
+    {
+      "id": "GT-GAP-012",
+      "section_id": "problem",
+      "category": "functional_ambiguity",
+      "severity": "nice_to_have",
+      "description": "« Supprimer les oublis d'équipement » n'est pas mesuré : ni taux actuel, ni cible.",
+      "keywords": ["oubli", "equipement"],
+      "resolvable_by": "human"
+    }
+  ],
+  "contradictions": [],
+  "expected_answers": [
+    {
+      "gap_ref": "GT-GAP-001",
+      "answer": "Le dossier porte en plus l'entité juridique, le type de contrat, l'intitulé de poste, le site d'affectation et le statut cadre ou non cadre : la liste des tâches est déduite de l'entité, du site et du poste.",
+      "keywords": ["entite", "poste"]
+    },
+    {
+      "gap_ref": "GT-GAP-002",
+      "answer": "Sont attendus la pièce d'identité, le RIB, la carte vitale et le justificatif de domicile, en PDF ou image de moins de 5 Mo. Ils sont conservés cinq ans après la sortie du collaborateur, puis purgés.",
+      "keywords": ["document", "conservation"]
+    },
+    {
+      "gap_ref": "GT-GAP-003",
+      "answer": "Seuls les RH de l'entité concernée et le manager direct accèdent au dossier ; l'IT et les services généraux ne voient que leurs propres tâches, sans les documents administratifs. Chaque consultation d'un document est tracée.",
+      "keywords": ["acces", "rh", "manager"]
+    },
+    {
+      "gap_ref": "GT-GAP-004",
+      "answer": "Les tâches IT et badge doivent être terminées cinq jours ouvrés avant l'arrivée, les autres la veille. Une tâche est en retard dès que son échéance est dépassée sans clôture.",
+      "keywords": ["tache", "jours ouvres"]
+    },
+    {
+      "gap_ref": "GT-GAP-005",
+      "answer": "La liste des tâches vient d'un modèle par couple entité + poste, maintenu par les RH dans le portail, avec des tâches optionnelles cochables par le manager.",
+      "keywords": ["modele", "tache"]
+    },
+    {
+      "gap_ref": "GT-GAP-006",
+      "answer": "Si la date d'arrivée recule, les échéances sont décalées d'autant et les tâches déjà terminées restent acquises. Si elle avance et rend une échéance impossible, la tâche est marquée « à traiter en urgence » et le manager est alerté.",
+      "keywords": ["date", "echeance"]
+    },
+    {
+      "gap_ref": "GT-GAP-007",
+      "answer": "Une relance part automatiquement au service responsable à J-3 de l'échéance, puis chaque jour, avec copie au manager après la deuxième relance.",
+      "keywords": ["relance", "service"]
+    },
+    {
+      "gap_ref": "GT-GAP-008",
+      "answer": "Les RH vérifient la lisibilité et la validité du document. Un refus renvoie une demande de nouveau dépôt au collaborateur avec le motif, sans supprimer l'ancien fichier.",
+      "keywords": ["verification", "refus"]
+    },
+    {
+      "gap_ref": "GT-GAP-009",
+      "answer": "Le SIRH est la source de vérité : il pousse les nouveaux contrats vers le portail chaque nuit. Le portail crée en retour un ticket par demande d'équipement dans l'outil IT et suit son statut.",
+      "keywords": ["sirh", "ticket"]
+    },
+    {
+      "gap_ref": "GT-GAP-010",
+      "answer": "Environ 300 dossiers par an, avec un pic de 40 arrivées début septembre, 50 utilisateurs simultanés et un affichage de page en moins de deux secondes.",
+      "keywords": ["dossiers", "simultanes"]
+    },
+    {
+      "gap_ref": "GT-GAP-012",
+      "answer": "Aujourd'hui un quart des arrivées connaît au moins un oubli d'équipement ; la cible est moins de 5 % à six mois.",
+      "keywords": ["oubli", "cible"]
+    }
+  ]
+}

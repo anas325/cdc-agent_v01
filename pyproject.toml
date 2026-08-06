@@ -30,6 +30,11 @@ dev = [
     "pytest>=9.1.1",
 ]
 
+# The project is not installed as a package, so put the repo root on sys.path
+# for `import src.…` to resolve under a bare `uv run pytest`.
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 # CPU-only torch: keeps Streamlit Cloud (Linux) from pulling multi-GB CUDA wheels.
 [[tool.uv.index]]
 name = "pytorch-cpu"

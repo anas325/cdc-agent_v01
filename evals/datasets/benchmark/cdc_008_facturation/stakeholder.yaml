@@ -1,0 +1,35 @@
+# Synthetic stakeholder for cdc_008_facturation.
+#
+# Knows the operational side (batch window, integrations, acceptance) but sends
+# every billing rule back to the finance reference document — those are the
+# `resolvable_by: rag` gaps.
+
+name: "Responsable comptable"
+role: "Business Owner"
+
+knowledge:
+  - "Le traitement de facturation démarre à 2h et doit être terminé avant 5h."
+  - "En cas d'échec sur un abonné, le lot continue et les abonnés en erreur sont rejoués à 5h30, avec alerte à la comptabilité."
+  - "Le référentiel client est la source de vérité des abonnements et pousse ses changements en continu."
+  - "Les écritures partent vers la comptabilité chaque jour au format FEC."
+  - "Un rejet comptable bloque la clôture et remonte en alerte, mais la facture reste valide."
+  - "Seuls la comptabilité et le service client accèdent aux factures ; le service client ne voit que ses abonnés."
+  - "L'archivage des factures est à valeur probante, avec horodatage et empreinte."
+  - "Le projet est accepté si un mois complet est facturé sans retraitement manuel et sans écart sur un échantillon de 500 abonnés."
+  - "La bascule est au 1er janvier, sans reprise des factures historiques."
+  - "L'ancien moteur reste consultable en lecture seule pendant dix ans."
+
+unknown:
+  - "Le détail des règles de prorata et de cumul des remises"
+  - "La séquence exacte des relances de recouvrement"
+  - "Les plafonds de validation des avoirs"
+  - "Les mentions légales obligatoires sur une facture"
+
+behavior:
+  style: precise
+  unknown_rate: 0.05
+  allow_contradictions: false
+
+contradictions:
+  - "Les factures peuvent être modifiées après émission tant qu'elles ne sont pas payées."
+  - "Le traitement de facturation peut déborder jusqu'à 9h du matin sans conséquence."
