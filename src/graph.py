@@ -28,7 +28,7 @@ from src.decisions import make_decision, now_iso
 from src.llm import current_model_name, map_structured
 from src.ids import stable_id
 from src.rag import ingest_source_docs
-from src.state import CDCState, ContextItem, DecisionLogEntry, SectionStatus, TurnLogEntry
+from src.state import CDCState, ContextItem, DecisionLogEntry, Gap, SectionStatus, TurnLogEntry
 from src.utils.cdc_sections import split_cdc_by_sections
 
 
@@ -39,6 +39,25 @@ def _log(state: CDCState, agent: str, summary: str, **details) -> TurnLogEntry:
     if elapsed is not None:
         details = {**details, "_elapsed_s": round(elapsed, 3)}
     return TurnLogEntry(turn=state.get("turn", 0), agent=agent, summary=summary, details=details)
+
+
+def _merge_gaps(existing: list[Gap], new: list[Gap]) -> list[Gap]:
+    """Append only genuinely new gaps, keyed by id.
+
+    Gap ids are content hashes, so an agent re-reporting the same finding yields
+    the same id. Appending blindly let a duplicate reach the candidate pool and
+    be asked twice in one batch. Matching against *every* status also stops a
+    gap that was already resolved or settled by an assumption from being
+    resurrected the moment an agent mentions it again.
+    """
+    seen = {g.id for g in existing}
+    out = list(existing)
+    for gap in new:
+        if gap.id in seen:
+            continue
+        seen.add(gap.id)
+        out.append(gap)
+    return out
 
 
 def _decide(state: CDCState, agent: str, decision_type: str, summary: str, **kw) -> DecisionLogEntry:
@@ -187,13 +206,16 @@ def initial_scan_node(state: CDCState) -> dict:
         [partial(gap_finder_agent.run_gap_finder, base, mode="section", section_id=sec.id) for sec in scan_sections]
     )
     for sec, result in zip(scan_sections, results):
-        gaps.extend(result.new_gaps)
+        # Les passes voient toutes le même instantané pré-scan : deux sections
+        # peuvent donc remonter la même incohérence transversale.
+        before = len(gaps)
+        gaps = _merge_gaps(gaps, result.new_gaps)
         decisions.extend(result.decisions)
         logs.append(
             _log(
                 state,
                 "initial_scan",
-                f"Scan initial {sec.id} : {len(result.new_gaps)} lacune(s).",
+                f"Scan initial {sec.id} : {len(gaps) - before} lacune(s).",
                 section_id=sec.id,
             )
         )
@@ -206,23 +228,11 @@ def orchestrator_node(state: CDCState) -> dict:
     turn = state.get("turn", 0) + 1
     logs: list[TurnLogEntry] = []
 
-    if state.get("pending_user_questions"):
-        logs.append(_log(state, "orchestrator", "Questions en attente d'un tour précédent, envoi direct."))
-        return {"turn": turn, "turn_log": logs}
-
-    fresh_items = [it for it in state["context_items"] if it.fresh]
-    if fresh_items:
-        ids = [it.id for it in fresh_items]
-        cleared = [it.model_copy(update={"fresh": False}) if it.id in ids else it for it in state["context_items"]]
-        logs.append(_log(state, "orchestrator", f"Ré-évaluation de {len(ids)} élément(s) frais.", item_ids=ids))
-        return {
-            "turn": turn,
-            "current_mode": "fresh",
-            "active_fresh_item_ids": ids,
-            "context_items": cleared,
-            "turn_log": logs,
-        }
-
+    # Checked FIRST, before the pending-questions and fresh-item shortcuts.
+    # Those two both return early, so evaluating the limit after them meant a
+    # self-sustaining loop (each answer creating a fresh item, whose re-scan
+    # creates the next question) never reached the limit at all — max_turns was
+    # unenforceable exactly in the case it exists for.
     limits = orch.apply_loop_limits({**state, "turn": turn})
     if limits.hit_limit:
         at_limit = {**state, "turn": turn}
@@ -270,6 +280,23 @@ def orchestrator_node(state: CDCState) -> dict:
             ],
         }
 
+    if state.get("pending_user_questions"):
+        logs.append(_log(state, "orchestrator", "Questions en attente d'un tour précédent, envoi direct."))
+        return {"turn": turn, "turn_log": logs}
+
+    fresh_items = [it for it in state["context_items"] if it.fresh]
+    if fresh_items:
+        ids = [it.id for it in fresh_items]
+        cleared = [it.model_copy(update={"fresh": False}) if it.id in ids else it for it in state["context_items"]]
+        logs.append(_log(state, "orchestrator", f"Ré-évaluation de {len(ids)} élément(s) frais.", item_ids=ids))
+        return {
+            "turn": turn,
+            "current_mode": "fresh",
+            "active_fresh_item_ids": ids,
+            "context_items": cleared,
+            "turn_log": logs,
+        }
+
     next_section = orch.pick_next_section({**state, "turn": turn})
     if next_section is None:
         logs.append(_log(state, "orchestrator", "Toutes les sections requises sont complètes. Passage à la synthèse."))
@@ -302,7 +329,7 @@ def gap_finder_node(state: CDCState) -> dict:
     gaps = list(state["gaps"])
     resolved_ids = set(result.resolved_gap_ids)
     gaps = [g.model_copy(update={"status": "resolved"}) if g.id in resolved_ids else g for g in gaps]
-    gaps.extend(result.new_gaps)
+    gaps = _merge_gaps(gaps, result.new_gaps)
 
     updates: dict = {"gaps": gaps, "decision_log": list(result.decisions)}
     logs = [
@@ -414,6 +441,9 @@ def integrate_answers_node(state: CDCState) -> dict:
     new_items: list[ContextItem] = []
     asked_this_turn = []
     decisions: list[DecisionLogEntry] = []
+    # gap.conflicting_item_ids of contradictions the user has just settled ->
+    # the answer that settles them. See _supersede_losing_assumptions.
+    settled_by: dict[str, str] = {}
 
     for pq in batch:
         raw = answers.get(pq.gap_id, {})
@@ -461,6 +491,9 @@ def integrate_answers_node(state: CDCState) -> dict:
             gaps_by_id[gap.id] = gap.model_copy(
                 update={"status": "user_answered", "answer_item_ids": gap.answer_item_ids + [item.id]}
             )
+            if gap.category == "contradiction":
+                for cid in gap.conflicting_item_ids:
+                    settled_by.setdefault(cid, item.id)
             decisions.append(
                 _decide(
                     state,
@@ -475,15 +508,70 @@ def integrate_answers_node(state: CDCState) -> dict:
             )
         new_items.append(item)
 
+    context_items, supersede_decisions = _supersede_losing_assumptions(state, settled_by)
+    decisions.extend(supersede_decisions)
+
+    summary = f"{len(new_items)} réponse(s) intégrée(s)."
+    if supersede_decisions:
+        summary += f" {len(supersede_decisions)} hypothèse(s) contredite(s) retirée(s) du contexte."
+
     return {
-        "context_items": list(state["context_items"]) + new_items,
+        "context_items": context_items + new_items,
         "gaps": list(gaps_by_id.values()),
         "asked_questions": list(state["asked_questions"]) + asked_this_turn,
         "pending_user_questions": [],
-        "active_fresh_item_ids": list(set(state.get("active_fresh_item_ids", []) + [it.id for it in new_items])),
+        # Sorted, not set-ordered: this is checkpointed state and must not vary
+        # between two otherwise identical runs.
+        "active_fresh_item_ids": sorted(
+            set(state.get("active_fresh_item_ids", []) + [it.id for it in new_items])
+        ),
         "decision_log": decisions,
-        "turn_log": [_log(state, "integrate_answers", f"{len(new_items)} réponse(s) intégrée(s).")],
+        "turn_log": [_log(state, "integrate_answers", summary)],
     }
+
+
+def _supersede_losing_assumptions(
+    state: CDCState, settled_by: dict[str, str]
+) -> tuple[list[ContextItem], list[DecisionLogEntry]]:
+    """Retire the assumptions a user answer has just overruled.
+
+    Without this, answering a contradiction only *adds* the correct value beside
+    the wrong one: the ASSUMPTION stays live context, the critic re-detects the
+    same conflict against the new answer, and the swarm asks the same question
+    every turn until it runs out of them.
+
+    The rule is deterministic and needs no LLM call, because the ranking is
+    already in the model: a user answer is confidence=1.0 / accepted, while an
+    assumption is a stopgap that is always `needs_review`. So a user answer to a
+    contradiction supersedes every *assumption* that contradiction cites. Nothing
+    else is touched — two conflicting user answers, or a conflict with the
+    initial CDC, is a real editorial decision and stays open for the author.
+    """
+    if not settled_by:
+        return list(state["context_items"]), []
+
+    items: list[ContextItem] = []
+    decisions: list[DecisionLogEntry] = []
+    for it in state["context_items"]:
+        winner = settled_by.get(it.id)
+        if winner is None or it.source != "assumption" or it.superseded_by is not None:
+            items.append(it)
+            continue
+        # Kept in state, not deleted: the audit trail must still be able to show
+        # what the system had assumed and what replaced it.
+        items.append(it.model_copy(update={"superseded_by": winner, "validation_status": "rejected"}))
+        decisions.append(
+            _decide(
+                state,
+                "integrate_answers",
+                "assumption_superseded",
+                f"Hypothèse {it.id} retirée : la réponse utilisateur {winner} tranche la contradiction.",
+                input_ids=[it.id],
+                output_ids=[winner],
+                rule="user_answer_beats_assumption",
+            )
+        )
+    return items, decisions
 
 
 def _skip_section(state: CDCState, section_id: str) -> dict:
@@ -531,7 +619,7 @@ def critic_node(state: CDCState) -> dict:
     fresh_ids = state.get("active_fresh_item_ids", [])
     result = critic_agent.run_critic(state, fresh_ids)
 
-    gaps = list(state["gaps"]) + result.new_gaps
+    gaps = _merge_gaps(list(state["gaps"]), result.new_gaps)
     statuses = dict(state["section_statuses"])
     for sid, reason in result.reopened_sections.items():
         statuses[sid] = SectionStatus(section_id=sid, status="reopened", reopen_reason=reason)

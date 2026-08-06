@@ -5,7 +5,18 @@ from __future__ import annotations
 from src.state import CDCState, ContextItem, Gap, SectionConfig
 
 
+def live_items(items: list[ContextItem]) -> list[ContextItem]:
+    """Context items still in force: superseded ones are no longer part of the CDC.
+
+    An item retired by a later, more authoritative answer (see
+    ContextItem.superseded_by) must disappear from every prompt — otherwise the
+    critic keeps re-detecting the contradiction that the answer just settled.
+    """
+    return [it for it in items if it.superseded_by is None]
+
+
 def format_context_items(items: list[ContextItem], section_id: str | None = None) -> str:
+    items = live_items(items)
     if section_id is not None:
         items = [it for it in items if section_id in it.section_ids or not it.section_ids]
     if not items:
@@ -78,6 +89,40 @@ def format_asked_questions(state: CDCState) -> str:
     if not aq:
         return "(aucune question posée jusqu'ici)"
     return "\n".join(f"- (gap={a.gap_id}, turn={a.turn}): {a.text}" for a in aq)
+
+
+def valid_section_ids(state: CDCState) -> set[str]:
+    """The only section ids that exist — sections are config, never LLM output."""
+    return {s.id for s in state.get("sections_config", [])}
+
+
+def coerce_section_ids(state: CDCState, raw_ids: list[str], fallback: list[str]) -> list[str]:
+    """Keep only real section ids, falling back when an agent returned none.
+
+    Agents are asked for section ids but readily hand back *context item* ids
+    instead — every context line in their prompt is rendered as `id=ctx_…`, so
+    that is what they echo. Left unchecked those ids propagate: they land on the
+    Gap, get copied onto the answer ContextItem built from it, and that answer
+    then belongs to no section at all — invisible to section completion, and
+    re-randomising the content-hashed gap id on every re-detection.
+
+    `fallback` is used verbatim when nothing valid survives (it is filtered too).
+    """
+    known = valid_section_ids(state)
+    kept = [sid for sid in dict.fromkeys(raw_ids) if sid in known]
+    if kept:
+        return kept
+    return [sid for sid in dict.fromkeys(fallback) if sid in known]
+
+
+def sections_of_items(state: CDCState, item_ids: list[str]) -> list[str]:
+    """Union of the section ids carried by `item_ids` — the natural fallback."""
+    wanted = set(item_ids)
+    out: list[str] = []
+    for it in state.get("context_items", []):
+        if it.id in wanted:
+            out.extend(it.section_ids)
+    return [sid for sid in dict.fromkeys(out) if sid in valid_section_ids(state)]
 
 
 def get_section(state: CDCState, section_id: str) -> SectionConfig:

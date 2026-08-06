@@ -32,6 +32,7 @@ from src.state import (
     Gap,
     PendingQuestion,
 )
+from src.utils.text_match import first_near_duplicate, is_too_vague
 
 _SEVERITY_ORDER = {"blocking": 0, "important": 1, "nice_to_have": 2}
 
@@ -148,6 +149,87 @@ lever cette ambiguïté. La question DOIT :
     return call_structured(prompt, QuestionDraft, prompt_id="gap_filler.question").question_text
 
 
+class _Repeat(BaseModel):
+    """A question that restates one already asked, and the answer that settled it."""
+
+    earlier_question: str
+    earlier_gap_id: str
+    answer_item_id: str | None = None
+    reason: str
+
+
+def _find_repeat(
+    state: CDCState,
+    question_text: str,
+    batch: list[PendingQuestion],
+    *,
+    check_vague: bool = False,
+) -> _Repeat | None:
+    """Deterministic second opinion on "have we already asked this?".
+
+    The LLM gate answers "does the context resolve it?", which for a live
+    contradiction is honestly "no" however many times the question has gone out.
+    This one compares against what was actually asked — including what is already
+    queued for *this* turn, since two gaps describing the same finding otherwise
+    put the same question in one batch — so a loop cannot outlast it. Text
+    matching is a backstop, not the primary guard: a re-detection that slips past
+    it is still caught upstream by the stable gap id and the per-gap budget.
+    """
+    # (question, gap_id) pairs, oldest first.
+    history = [(a.text, a.gap_id) for a in state.get("asked_questions", [])]
+    history += [(pq.text, pq.gap_id) for pq in batch]
+    if not history:
+        return None
+
+    idx = first_near_duplicate(question_text, [text for text, _ in history])
+    reason = "near_duplicate_of_asked_question"
+    if idx is None and check_vague and is_too_vague(question_text):
+        # Only meaningful for a *rewrite*: narrowed down to almost no content
+        # words ("Quelle durée doit être retenue ?"), it no longer says what it
+        # is about and is unanswerable on its own. Attribute it to the last
+        # question asked, which is the one it was narrowed from. A freshly
+        # drafted question this short is a drafting problem, not a loop, and is
+        # left to the gate.
+        idx = len(history) - 1
+        reason = "rewritten_question_too_vague"
+    if idx is None:
+        return None
+
+    earlier_text, earlier_gap_id = history[idx]
+    gap = next((g for g in state["gaps"] if g.id == earlier_gap_id), None)
+    return _Repeat(
+        earlier_question=earlier_text,
+        earlier_gap_id=earlier_gap_id,
+        answer_item_id=gap.answer_item_ids[-1] if gap and gap.answer_item_ids else None,
+        reason=reason,
+    )
+
+
+def _drop_as_repeat(state: CDCState, gap: Gap, question_text: str, repeat: _Repeat, result: FillResult) -> None:
+    """Close `gap` against the earlier question instead of asking it again."""
+    result.gap_updates[gap.id] = "resolved"
+    if repeat.answer_item_id:
+        result.resolved_by[gap.id] = repeat.answer_item_id
+    result.decisions.append(
+        make_decision(
+            state,
+            agent="gap_filler",
+            decision_type="question_deduped",
+            summary=(
+                f"Question non posée pour {gap.id} : elle redemande ce qui a déjà été "
+                f"demandé pour {repeat.earlier_gap_id}."
+            ),
+            input_ids=[gap.id, repeat.earlier_gap_id],
+            output_ids=[repeat.answer_item_id] if repeat.answer_item_id else [],
+            # Règle déterministe (src/utils/text_match.py), pas un jugement LLM :
+            # ni prompt_id ni model, pour ne pas fausser l'audit.
+            rule=repeat.reason,
+            candidate_question=question_text,
+            earlier_question=repeat.earlier_question,
+        )
+    )
+
+
 def fill_gaps(state: CDCState, turn: int, max_batch: int, max_per_gap: int) -> FillResult:
     """Selects the questions to ask this turn, section by section.
 
@@ -261,7 +343,29 @@ def fill_gaps(state: CDCState, turn: int, max_batch: int, max_per_gap: int) -> F
 
         question_text = _draft_question(state, gap)
 
+        # Cheap and deterministic, so it runs before the gate's LLM call.
+        repeat = _find_repeat(state, question_text, result.pending_questions)
+        if repeat is not None:
+            _drop_as_repeat(state, gap, question_text, repeat, result)
+            continue
+
         verdict = orch.dedup_gate(state, gap, question_text)
+        if verdict.already_asked and state.get("asked_questions"):
+            # The gate only ever sees the asked-questions block, so it can be
+            # right here where the text match was too strict; take its word but
+            # attribute the drop to the nearest question we can actually name.
+            _drop_as_repeat(
+                state,
+                gap,
+                question_text,
+                _Repeat(
+                    earlier_question=state["asked_questions"][-1].text,
+                    earlier_gap_id=state["asked_questions"][-1].gap_id,
+                    reason="gate_already_asked",
+                ),
+                result,
+            )
+            continue
         if verdict.already_resolved and verdict.resolved_by_item_id:
             result.gap_updates[gap.id] = "resolved"
             result.resolved_by[gap.id] = verdict.resolved_by_item_id
@@ -279,6 +383,16 @@ def fill_gaps(state: CDCState, turn: int, max_batch: int, max_per_gap: int) -> F
             )
             continue
         if verdict.partially_resolved and verdict.rewritten_question:
+            # The rewrite is only accepted if it is still a real question and
+            # isn't one we've already asked. Left unchecked this branch is not a
+            # dedup at all — it rewrites and asks anyway — and it is how the same
+            # question kept going out turn after turn, each time a little shorter.
+            rewrite_repeat = _find_repeat(
+                state, verdict.rewritten_question, result.pending_questions, check_vague=True
+            )
+            if rewrite_repeat is not None:
+                _drop_as_repeat(state, gap, verdict.rewritten_question, rewrite_repeat, result)
+                continue
             result.decisions.append(
                 make_decision(
                     state,

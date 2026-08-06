@@ -78,6 +78,11 @@ def apply_loop_limits(state: CDCState) -> LimitCheckResult:
 class DedupVerdict(BaseModel):
     already_resolved: bool = False
     partially_resolved: bool = False
+    # Distinct de already_resolved : la question a déjà été POSÉE (et donc déjà
+    # traitée), même si la contradiction sous-jacente n'est pas encore tranchée.
+    # Sans ce verdict, une question qui relance un conflit non résolu reçoit
+    # honnêtement "non, le contexte n'y répond pas" et repart en boucle.
+    already_asked: bool = False
     resolved_by_item_id: str | None = None
     rewritten_question: str = ""
 
@@ -98,11 +103,17 @@ QUESTIONS DÉJÀ POSÉES PRÉCÉDEMMENT :
 {format_asked_questions(state)}
 
 Réponds :
+- already_asked=true si la question candidate redemande, même reformulée, ce qui a
+  DÉJÀ été demandé dans la liste ci-dessus. C'est le cas même si le problème n'est
+  toujours pas réglé : on ne repose pas une question à laquelle l'utilisateur a
+  déjà répondu.
 - already_resolved=true si le contexte répond déjà PLEINEMENT à la question (donne
   resolved_by_item_id = id de l'élément de contexte qui répond).
 - partially_resolved=true si le contexte répond partiellement : dans ce cas fournis
-  rewritten_question ne portant que sur la partie manquante.
-- Sinon (rien ne répond), laisse already_resolved=false, partially_resolved=false,
+  rewritten_question ne portant que sur la partie manquante. La reformulation doit
+  apporter une VRAIE précision nouvelle ; si tu ne peux que redire la question
+  candidate en plus court, réponds plutôt already_asked ou ne signale rien.
+- Sinon (rien ne répond), laisse tous les booléens à false et
   rewritten_question="" (la question candidate sera posée telle quelle)."""
     return call_structured(prompt, DedupVerdict, prompt_id="orchestrator.dedup")
 

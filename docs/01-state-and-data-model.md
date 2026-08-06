@@ -68,15 +68,25 @@ class ContextItem(BaseModel):
     ] = "unreviewed"
     model: str | None = None                      # LLM that produced it, if any
     prompt_version: str | None = None
+    superseded_by: str | None = None              # id of the item that replaced this one
 ```
 
 This is the unit of truth in the system. It doesn't matter whether a fact
 came from the user typing an answer, a RAG hit, or an LLM-proposed default
 assumption — it's a `ContextItem` either way, distinguished only by `source`.
 `fresh=True` is the mechanism that drives re-evaluation: the orchestrator
-checks for fresh items before anything else each turn (see
+checks for fresh items each turn (see
 [Graph & Agents](02-graph-and-agents.md#orchestrator)), and the gap-finder /
 critic use it to know which items are new this turn.
+
+`superseded_by` is how a fact stops being true without being lost. An
+assumption the system invented, later overruled by a user answer to the
+contradiction it caused, is marked (`superseded_by` = the answer's id,
+`validation_status="rejected"`) rather than deleted — see
+[integrate_answers](02-graph-and-agents.md#integrate_answers). Everything that
+builds a prompt or the final document filters through
+`context_utils.live_items()`, so a superseded item is invisible to the agents;
+everything that audits the run still sees it.
 
 Every provenance field is defaulted, so checkpoints written before they existed
 still deserialize. Who fills what:
@@ -119,9 +129,9 @@ class DecisionLogEntry(BaseModel):
     agent: str                    # gap_finder, gap_filler, critic, ...
     decision_type: Literal[
         "gap_detected", "rag_answer", "rag_rejected", "question_drafted",
-        "question_deduped", "assumption_built", "answer_integrated",
-        "contradiction_found", "section_status_changed", "section_synthesized",
-        "loop_limit_applied", "final_check",
+        "question_deduped", "assumption_built", "assumption_superseded",
+        "answer_integrated", "contradiction_found", "section_status_changed",
+        "section_synthesized", "loop_limit_applied", "final_check",
     ]
     summary: str
     input_ids: list[str]          # gaps / context items fed in
@@ -160,7 +170,16 @@ class Gap(BaseModel):
     question_text: str | None = None   # the question actually asked, once asked
     answer_item_ids: list[str] = []
     questions_asked: int = 0
+    conflicting_item_ids: list[str] = []  # contradictions only: the items in conflict
 ```
+
+`section_ids` only ever holds ids from `config/sections.yaml`. Agents return
+it as free-form LLM output and reliably confuse it with the `ctx_…` ids printed
+throughout their prompts, so it is filtered through
+`context_utils.coerce_section_ids()` before it reaches a `Gap` — misplaced
+`ctx_…` ids land in `conflicting_item_ids` instead. `conflicting_item_ids` is
+what lets a settled contradiction retire the item that lost, rather than being
+re-detected every turn.
 
 Status lifecycle: a gap starts `open`. It ends up `rag_answered` (RAG
 sufficed), `user_answered` (a human answered), `assumed` (no answer given,
@@ -232,6 +251,8 @@ the Streamlit sidebar (see [Streamlit UI](05-streamlit-ui.md)).
 Every agent that calls the LLM needs to hand it a text rendering of relevant
 state. `context_utils.py` centralizes that so formatting stays consistent:
 
+- `live_items(items)` — drops superseded items. Every renderer below goes
+  through it, so a retired assumption cannot reach an agent's prompt.
 - `format_context_items(items, section_id=None)` — bullet list of context
   items, tagging assumptions as `[ASSUMPTION]`.
 - `format_all_sections_context(state)` — the above, grouped under a heading
@@ -241,8 +262,21 @@ state. `context_utils.py` centralizes that so formatting stays consistent:
   avoid an agent re-raising a gap that's already tracked.
 - `format_asked_questions(state)` — full question history, used by the dedup
   gate.
+- `coerce_section_ids(state, raw_ids, fallback)` / `valid_section_ids(state)` /
+  `sections_of_items(state, item_ids)` — the guard on LLM-returned section ids.
+  Sections are config; anything an agent invents (typically a `ctx_…` id it
+  copied out of its own prompt) is dropped here rather than propagating onto a
+  Gap and, from there, onto the answer built from it.
 - `get_section(state, section_id)` — lookup helper, raises `KeyError` if the
   id isn't in `sections_config`.
+
+## `src/utils/text_match.py` — "did we already ask this?"
+
+Accent-folded, stopword-free, entity-id-stripped content-word comparison, by
+**containment** rather than Jaccard (a repeat is usually a narrowed restatement,
+so the shorter side is nearly a subset of the longer one). Used by the gap
+filler's repeat check; deliberately independent of `evals/simulator.py`'s
+`keyword_score`, which serves the eval oracle and must not be imported by `src`.
 
 ## `src/decisions.py` — building audit records
 

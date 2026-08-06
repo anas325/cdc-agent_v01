@@ -489,8 +489,12 @@ def render_provenance(item) -> None:
         f":{VALIDATION_BADGE.get(item.validation_status, 'gray')}-badge"
         f"[{VALIDATION_LABELS.get(item.validation_status, item.validation_status)}]"
     )
+    # Une hypothèse tranchée plus tard par une réponse reste affichée (l'audit
+    # doit pouvoir la relire) mais ne doit pas se lire comme encore valable.
+    if item.superseded_by is not None:
+        badges.append(":gray-badge[remplacée]")
     st.markdown(f":material/reply: {' '.join(badges)}")
-    st.markdown(item.content)
+    st.markdown(f":gray[~~{item.content}~~]" if item.superseded_by else item.content)
 
     if item.evidence:
         with st.popover(f":material/description: Preuves ({len(item.evidence)})"):

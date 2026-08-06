@@ -11,7 +11,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from src.context_utils import format_all_sections_context, format_open_gaps, get_section
+from src.context_utils import (
+    coerce_section_ids,
+    format_all_sections_context,
+    format_open_gaps,
+    get_section,
+    sections_of_items,
+)
 from src.decisions import clamp_confidence, make_decision
 from src.ids import stable_id
 from src.llm import call_structured, current_model_name
@@ -167,10 +173,13 @@ def run_gap_finder(
 
     new_gaps: list[Gap] = []
     decisions: list[DecisionLogEntry] = []
+    # Le mode "fresh" n'a pas de section courante : on retombe sur les sections
+    # des éléments évalués plutôt que de laisser passer des ids inventés.
+    default_sections = [section_id] if section_id else sections_of_items(state, fresh_item_ids or [])
     for cand in output.new_gaps:
         gap = Gap(
             id=stable_id("gap", section_id or "", cand.category, cand.description),
-            section_ids=cand.section_ids or ([section_id] if section_id else []),
+            section_ids=coerce_section_ids(state, cand.section_ids, fallback=default_sections),
             category=cand.category,
             description=cand.description,
             severity=cand.severity,

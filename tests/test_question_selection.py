@@ -14,7 +14,7 @@ import pytest
 
 from src.agents.gap_filler import QuestionDraft, fill_gaps
 from src.agents.orchestrator import DedupVerdict
-from src.state import CDCState, Gap, SectionConfig
+from src.state import AskedQuestion, CDCState, Gap, SectionConfig
 
 
 @pytest.fixture
@@ -244,3 +244,135 @@ def test_dedup_rewrite_replaces_question_text(no_rag_hits, draft_calls, monkeypa
     result = fill_gaps(state, turn=1, max_batch=3, max_per_gap=2)
 
     assert [pq.text for pq in result.pending_questions] == ["Question reformulée ?"]
+
+
+# ---------------------------------------------------------------------------
+# Repeat suppression
+#
+# The gate is an LLM judgement on "does the context already answer this?", which
+# for a still-live contradiction is honestly "no" no matter how many times the
+# question has gone out. These cover the deterministic check that sits in front
+# of it — see tests/test_contradiction_loop.py for the structural half of the fix.
+# ---------------------------------------------------------------------------
+
+CART_QUESTION = (
+    "Quelle durée de conservation du panier après une erreur de paiement doit être retenue, "
+    "30 jours ou 24 heures ?"
+)
+
+
+def make_state_with_history(gaps: list[Gap], asked: list[AskedQuestion]) -> CDCState:
+    state = make_state(gaps)
+    state["asked_questions"] = asked
+    return state
+
+
+def test_a_question_already_asked_is_not_asked_again(no_rag_hits, dedup_passthrough, monkeypatch):
+    """The exact loop from bench_20260806_100245: same question, new gap id."""
+    monkeypatch.setattr(
+        "src.agents.gap_filler.call_structured",
+        lambda prompt, model, llm=None, max_retries=2, *, prompt_id=None: QuestionDraft(
+            question_text="Le panier doit-il être conservé 30 jours ou 24 heures après une "
+            "erreur de paiement ?"
+        ),
+    )
+    answered = make_gap("old_gap", "important", answer_item_ids=["ctx_answer"])
+    state = make_state_with_history(
+        [answered, make_gap("new_gap_same_question", "important")],
+        [AskedQuestion(id="q1", gap_id="old_gap", text=CART_QUESTION, turn=4)],
+    )
+
+    result = fill_gaps(state, turn=5, max_batch=3, max_per_gap=2)
+
+    assert result.pending_questions == []
+    assert result.gap_updates["new_gap_same_question"] == "resolved"
+    # Closed against the answer the earlier question already got.
+    assert result.resolved_by["new_gap_same_question"] == "ctx_answer"
+
+
+def test_a_vague_rewrite_of_an_asked_question_is_dropped(no_rag_hits, draft_calls, monkeypatch):
+    """"Quelle durée doit être retenue ?" — the rewrite branch's endgame."""
+    monkeypatch.setattr(
+        "src.agents.orchestrator.call_structured",
+        lambda prompt, model, llm=None, max_retries=2, *, prompt_id=None: DedupVerdict(
+            partially_resolved=True, rewritten_question="Quelle durée doit être retenue ?"
+        ),
+    )
+    state = make_state_with_history(
+        [make_gap("g1", "blocking")],
+        [AskedQuestion(id="q1", gap_id="g0", text=CART_QUESTION, turn=4)],
+    )
+
+    result = fill_gaps(state, turn=5, max_batch=3, max_per_gap=2)
+
+    assert result.pending_questions == []
+    assert result.gap_updates["g1"] == "resolved"
+
+
+def test_a_genuinely_new_question_still_gets_through(no_rag_hits, dedup_passthrough, monkeypatch):
+    """The guard must not swallow an unrelated question asked in the same run."""
+    monkeypatch.setattr(
+        "src.agents.gap_filler.call_structured",
+        lambda prompt, model, llm=None, max_retries=2, *, prompt_id=None: QuestionDraft(
+            question_text="Quel est le budget maximal alloué à la phase 1 du projet ?"
+        ),
+    )
+    state = make_state_with_history(
+        [make_gap("g1", "blocking")],
+        [AskedQuestion(id="q1", gap_id="g0", text=CART_QUESTION, turn=4)],
+    )
+
+    result = fill_gaps(state, turn=5, max_batch=3, max_per_gap=2)
+
+    assert [pq.gap_id for pq in result.pending_questions] == ["g1"]
+
+
+def test_two_gaps_with_the_same_question_are_asked_once(no_rag_hits, dedup_passthrough, monkeypatch):
+    """Duplicate gaps put the identical question in one batch (round 10 of the run)."""
+    monkeypatch.setattr(
+        "src.agents.gap_filler.call_structured",
+        lambda prompt, model, llm=None, max_retries=2, *, prompt_id=None: QuestionDraft(
+            question_text=CART_QUESTION
+        ),
+    )
+    state = make_state([make_gap("g1", "important"), make_gap("g2", "important")])
+
+    result = fill_gaps(state, turn=5, max_batch=3, max_per_gap=2)
+
+    assert [pq.gap_id for pq in result.pending_questions] == ["g1"]
+    assert result.gap_updates["g2"] == "resolved"
+
+
+def test_gate_already_asked_verdict_drops_the_question(no_rag_hits, draft_calls, monkeypatch):
+    monkeypatch.setattr(
+        "src.agents.orchestrator.call_structured",
+        lambda prompt, model, llm=None, max_retries=2, *, prompt_id=None: DedupVerdict(
+            already_asked=True
+        ),
+    )
+    state = make_state_with_history(
+        [make_gap("g1", "blocking")],
+        [AskedQuestion(id="q1", gap_id="g0", text=CART_QUESTION, turn=4)],
+    )
+
+    result = fill_gaps(state, turn=5, max_batch=3, max_per_gap=2)
+
+    assert result.pending_questions == []
+    assert result.gap_updates["g1"] == "resolved"
+
+
+def test_gate_already_asked_is_ignored_when_nothing_was_ever_asked(
+    no_rag_hits, draft_calls, monkeypatch
+):
+    """A hallucinated verdict must not silence the very first question."""
+    monkeypatch.setattr(
+        "src.agents.orchestrator.call_structured",
+        lambda prompt, model, llm=None, max_retries=2, *, prompt_id=None: DedupVerdict(
+            already_asked=True
+        ),
+    )
+    state = make_state([make_gap("g1", "blocking")])
+
+    result = fill_gaps(state, turn=1, max_batch=3, max_per_gap=2)
+
+    assert [pq.gap_id for pq in result.pending_questions] == ["g1"]

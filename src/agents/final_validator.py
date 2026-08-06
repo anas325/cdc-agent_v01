@@ -11,6 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from src.config import load_settings
+from src.context_utils import live_items
 from src.decisions import confidence_band, format_evidence
 from src.llm import call_structured
 from src.state import CDCState, ContextItem
@@ -27,8 +28,13 @@ class FinalCheckOutput(BaseModel):
 
 
 def find_unmapped_context(state: CDCState, mapped: dict[str, list[str]]) -> list[ContextItem]:
+    """Context that never made it into the document — an omission to flag.
+
+    A superseded item is excluded: it was deliberately retired by a later answer
+    (and logged as such), so reporting it here would read as a synthesis failure.
+    """
     mapped_ids = {iid for ids in mapped.values() for iid in ids}
-    return [it for it in state["context_items"] if it.id not in mapped_ids]
+    return [it for it in live_items(state["context_items"]) if it.id not in mapped_ids]
 
 
 def find_final_contradictions(qmd_text: str) -> list[str]:
@@ -128,6 +134,18 @@ def write_qa_report(
         else ""
     )
     lines += [_provenance_line(it) for it in machine_items] or ["_Aucune._"]
+    lines.append("")
+
+    # Rien n'est abandonné en silence : une hypothèse écartée par une réponse
+    # utilisateur disparaît du document, mais pas du rapport.
+    superseded = [it for it in state["context_items"] if it.superseded_by is not None]
+    by_id = {it.id: it for it in state["context_items"]}
+    lines.append(f"## Hypothèses écartées par une réponse ultérieure ({len(superseded)})")
+    lines += [
+        f"- ~~{it.content}~~\n  - _remplacée par : "
+        f"{by_id[it.superseded_by].content if it.superseded_by in by_id else it.superseded_by}_"
+        for it in superseded
+    ] or ["_Aucune._"]
     lines.append("")
 
     lines.append(f"## Éléments de contexte non intégrés au document ({len(unmapped)})")

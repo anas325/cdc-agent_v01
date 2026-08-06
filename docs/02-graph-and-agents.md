@@ -120,20 +120,37 @@ sections reach synthesis.
 
 #### Question dedup gate
 
-`dedup_gate(state, gap, candidate_question)` — one LLM call, invoked from
-`gap_filler_node` (not from the orchestrator agent module directly, despite
-living in `orchestrator.py`) for every question about to be queued. It's
-given the full cross-section context and the entire question-history log,
-and must decide:
+Two layers, in this order. The **deterministic repeat check**
+(`_find_repeat` in `gap_filler.py`, on top of `src/utils/text_match.py`) runs
+first, because it costs nothing: it compares the drafted question against every
+question already asked *and* those already queued this turn, by content-word
+containment with entity ids stripped. A match closes the gap against the earlier
+question instead of asking again.
 
+Then `dedup_gate(state, gap, candidate_question)` — one LLM call, invoked from
+`gap_filler_node` (not from the orchestrator agent module directly, despite
+living in `orchestrator.py`). It's given the full cross-section context and the
+entire question-history log, and must decide:
+
+- `already_asked=True` → this restates something already asked; don't ask again.
 - `already_resolved=True` → existing context already fully answers this;
   don't ask, mark the gap `resolved` using the existing item.
 - `partially_resolved=True` → context covers part of it; rewrite the
-  question to cover only the missing part.
-- neither → ask the candidate question as drafted.
+  question to cover only the missing part. The rewrite is itself put through
+  the repeat check and dropped if it just restates an asked question or has
+  narrowed down to almost no content words.
+- none of them → ask the candidate question as drafted.
 
 This runs *before* a question is added to a batch, so RAG answers and prior
 user answers never produce a redundant prompt to the user.
+
+**Why two layers.** The gate can only answer "does the context resolve this?".
+For a contradiction that is still live, "no" is the honest answer however many
+times the question has gone out — so the gate alone cannot end a repeat loop.
+The deterministic check answers a different question ("did we already ask
+this?"), which is exactly the one that terminates. Neither is the primary
+defence: a contradiction should stop being re-detected at all, which is what
+the stable gap id and the supersede rule below are for.
 
 #### Question batching
 
@@ -256,6 +273,25 @@ Otherwise, for each queued question it records the question into
   linked_gap_id=gap.id)` is created, gap → `user_answered` with the new item
   id appended to `answer_item_ids`.
 
+**Superseding.** When the answered gap is a `contradiction`, every
+`source="assumption"` item it cites in `conflicting_item_ids` is retired:
+`superseded_by` is set to the answer's id and `validation_status` to
+`rejected` (`_supersede_losing_assumptions`, logged as
+`assumption_superseded`). The rule is deterministic and needs no LLM call,
+because the ranking is already in the model — a user answer is
+`confidence=1.0 / accepted`, an assumption is a stopgap that is always
+`needs_review`. Nothing else is touched: two conflicting *user answers*, or a
+conflict with the initial CDC, is a real editorial decision and stays open for
+the author.
+
+This is what stops a settled contradiction from being re-detected. Without it
+an answer only *adds* the right value beside the wrong one, the assumption
+stays live context, and the critic raises the same conflict again next turn —
+forever. Superseded items are filtered out of every prompt by
+`context_utils.live_items()` and out of the final document, but they are never
+deleted: they stay in state, appear struck through in the UI, and get their own
+section in `qa_report.md`.
+
 Kept as a separate node from `critic` deliberately (see `prompt.md`) so
 "turning raw answers into context" and "checking those answers for
 contradictions" stay independently testable.
@@ -276,6 +312,24 @@ section that was `complete`, that section is flipped to `reopened` with
 `reopen_reason` set to the finding's description — which routes the
 orchestrator back to that section on a later turn. The critic never grades
 its own findings; it only inspects state other agents produced.
+
+Two things about the finding are not taken on trust:
+
+- **`section_ids` is validated** against `sections_config`
+  (`context_utils.coerce_section_ids`). Every context line in the prompt is
+  rendered as `id=ctx_…`, and models readily echo those back as "sections";
+  any that arrive are moved into `conflicting_item_ids`, and the section list
+  falls back to the sections of the cited items. An unchecked `ctx_…` here
+  propagates onto the Gap and then onto the answer built from it, leaving that
+  answer attached to no section at all.
+- **The gap id is hashed on `topic`**, a short normalized subject the finding
+  must restate identically each time, not on the free-text description — which
+  quotes whichever id happened to be fresh that turn and would therefore mint a
+  new gap id (and a fresh `questions_asked` budget) on every re-detection.
+
+`critic_node` merges findings with `_merge_gaps`, which drops any id already in
+`state["gaps"]` **in any status**, so a gap that was already resolved or settled
+by an assumption is not resurrected by a later mention.
 
 ### `synthesizer` / `final_validator`
 

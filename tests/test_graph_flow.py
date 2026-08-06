@@ -24,7 +24,7 @@ from src.agents.gap_finder import GapCandidate, GapFinderOutput
 from src.agents.orchestrator import DedupVerdict
 from src.agents.critic import ContradictionFinding
 from src.graph import build_graph
-from src.state import Gap, LoopSettings, SectionConfig, SectionStatus
+from src.state import ContextItem, Gap, LoopSettings, SectionConfig, SectionStatus
 
 
 # ---------------------------------------------------------------------------
@@ -343,3 +343,58 @@ def test_max_turns_with_blocking_gap_stops_instead_of_looping(graph, scripted_ll
 
     state = graph.get_state(config)
     assert state.next == (), "graph must terminate, not keep looping"
+
+
+# ---------------------------------------------------------------------------
+# 4. max_turns is enforced even while fresh items keep arriving.
+# ---------------------------------------------------------------------------
+
+
+def test_max_turns_is_not_bypassed_by_fresh_items(graph, scripted_llm):
+    """Regression: the fresh-item shortcut used to run before the limit check.
+
+    Every answer produces a fresh context item, whose re-scan produces the next
+    question — so in bench_20260806_100245 the orchestrator took the fresh-item
+    early return on every single turn and never reached apply_loop_limits at all.
+    max_turns was unenforceable in exactly the runaway case it exists for.
+    """
+    sections = make_sections()
+    statuses = {
+        "sec_a": SectionStatus(section_id="sec_a", status="in_progress"),
+        "sec_b": SectionStatus(section_id="sec_b", status="empty"),
+    }
+    blocking_gap = Gap(
+        id="gap_blocking",
+        section_ids=["sec_a"],
+        category="business_rule",
+        description="Le volume de production maximal n'est toujours pas précisé.",
+        severity="blocking",
+        status="open",
+    )
+    seed = base_seed(
+        sections,
+        statuses,
+        gaps=[blocking_gap],
+        # A fresh item waiting to be re-scanned — the state the loop sat in.
+        context_items=[
+            ContextItem(
+                id="ctx_fresh",
+                content="30 jours",
+                source="user_answer",
+                section_ids=["sec_a"],
+                turn_added=2,
+                fresh=True,
+            )
+        ],
+        loop_settings=LoopSettings(max_turns=3, max_questions_per_batch=3, max_questions_per_gap=2),
+        turn=2,
+    )
+    config = make_config()
+
+    # Again nothing is scripted: reaching any agent means the limit was skipped.
+    graph.update_state(config, seed, as_node="initial_scan")
+    result = graph.invoke(None, config)
+
+    assert result.get("done") is True
+    assert "volume de production maximal" in result["stop_reason"]
+    assert graph.get_state(config).next == ()

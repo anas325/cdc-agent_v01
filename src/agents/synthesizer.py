@@ -16,7 +16,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from src.config import load_settings
-from src.context_utils import format_context_items, get_section
+from src.context_utils import format_context_items, get_section, live_items
 from src.llm import call_structured, map_structured
 from src.state import CDCState, ContextItem
 
@@ -66,7 +66,10 @@ def build_section_render_map(state: CDCState) -> tuple[dict[str, str], dict[str,
     LLM calls are fanned out concurrently; results are zipped back in order.
     """
     sections = state["sections_config"]
-    items_per = [[it for it in state["context_items"] if sec.id in it.section_ids] for sec in sections]
+    # live_items: une hypothèse tranchée par une réponse utilisateur ne doit pas
+    # ressortir en encadré « Hypothèse retenue » dans le document final.
+    available = live_items(state["context_items"])
+    items_per = [[it for it in available if sec.id in it.section_ids] for sec in sections]
     proses = map_structured(
         [partial(render_slot, state, sec.id, items) for sec, items in zip(sections, items_per)]
     )

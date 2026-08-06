@@ -18,8 +18,12 @@ PROMPT_VERSIONS: dict[str, str] = {
     "gap_filler.rag_grade": "v1",
     "gap_filler.question": "v1",
     "gap_filler.assumption": "v1",
-    "orchestrator.dedup": "v1",
-    "critic.contradiction": "v1",
+    # v2 : verdict "already_asked" ajouté (une question déjà posée et répondue
+    # n'est pas la même chose qu'un contexte qui y répond).
+    "orchestrator.dedup": "v2",
+    # v2 : section_ids contraint à la liste fermée des sections, ids ctx_...
+    # déplacés dans conflicting_item_ids, et topic stable ajouté.
+    "critic.contradiction": "v2",
     "synthesizer.slot": "v1",
     "final_validator.contradictions": "v1",
     # Not a graph agent: the synthetic stakeholder that answers question batches

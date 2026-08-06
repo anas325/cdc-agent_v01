@@ -57,6 +57,7 @@ DecisionType = Literal[
     "question_drafted",
     "question_deduped",
     "assumption_built",
+    "assumption_superseded",
     "answer_integrated",
     "contradiction_found",
     "section_status_changed",
@@ -97,6 +98,11 @@ class ContextItem(BaseModel):
     validation_status: ValidationStatus = "unreviewed"
     model: str | None = None  # modèle LLM ayant produit le contenu, le cas échéant
     prompt_version: str | None = None
+    # Id de l'élément qui remplace celui-ci. Une hypothèse contredite puis
+    # tranchée par une réponse utilisateur n'est pas supprimée (l'audit doit
+    # pouvoir la relire) : elle est retirée du contexte vivant. Voir
+    # context_utils.live_items et la règle dans graph.integrate_answers_node.
+    superseded_by: str | None = None
 
 
 class Gap(BaseModel):
@@ -110,6 +116,10 @@ class Gap(BaseModel):
     answer_item_ids: list[str] = Field(default_factory=list)
     questions_asked: int = 0
     rag_attempted: bool = False
+    # Pour une contradiction : les ContextItem qui s'opposent. C'est ce qui
+    # permet de retirer le perdant une fois la contradiction tranchée, plutôt
+    # que de la redétecter à chaque tour.
+    conflicting_item_ids: list[str] = Field(default_factory=list)
 
 
 class SectionStatus(BaseModel):
