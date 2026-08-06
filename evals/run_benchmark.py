@@ -316,6 +316,53 @@ def load_case_row(case_out: Path) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Progress reporting
+# ---------------------------------------------------------------------------
+
+# A cold case spends minutes between visible events, so the run narrates itself
+# as it goes rather than printing one line once the case is over. Everything here
+# goes to stderr: stdout stays the summary a caller might want to pipe, and a
+# redirected log keeps the two apart.
+PROGRESS = True
+
+
+def progress(line: str, *, indent: int = 4) -> None:
+    if PROGRESS:
+        print(" " * indent + line, file=sys.stderr, flush=True)
+
+
+def _counts(values: dict) -> str:
+    """The three numbers worth watching move: gaps found, still open, questions."""
+    gaps = values.get("gaps") or []
+    statuses = Counter(g.status for g in gaps)
+    sections = (values.get("section_statuses") or {}).values()
+    complete = sum(1 for s in sections if s.status == "complete")
+    return (
+        f"{len(gaps)} lacune(s), {statuses['open']} ouverte(s), "
+        f"{len(values.get('asked_questions') or [])} question(s), "
+        f"{complete}/{len(sections)} section(s)"
+    )
+
+
+def progress_node(node: str, values: dict, node_s: float | None) -> None:
+    took = f"{node_s:5.1f}s" if node_s is not None else "    ?s"
+    section = values.get("current_section_id")
+    where = f" [{section}]" if section and node in ("gap_finder", "gap_filler") else ""
+    # 18 wide: `integrate_answers` is the longest node name, and a column that
+    # shifts by one on that node makes the trace much harder to scan.
+    progress(f"t{values.get('turn', 0):>2} {node:<18}{where:<14} {took}  {_counts(values)}")
+
+
+def progress_round(round_no: int, questions: list[dict], batch) -> None:
+    """The human-in-the-loop turn, which is the interesting part of a run."""
+    progress(f"— tour de questions {round_no + 1} : {len(questions)} question(s)")
+    for question, reply in zip(questions, batch.replies):
+        answer = "« je ne sais pas »" if reply.skip else reply.text
+        progress(f"Q {question.get('text', '')[:110]}", indent=6)
+        progress(f"R [{reply.reason}] {answer[:110]}", indent=6)
+
+
+# ---------------------------------------------------------------------------
 # Driving the graph
 # ---------------------------------------------------------------------------
 
@@ -466,6 +513,7 @@ def run_case(case: BenchmarkCase, *, simulator, loop_settings: LoopSettings,
                     sync_s=sync_s,
                     keys=sorted(node_values.keys()) if isinstance(node_values, dict) else [],
                 )
+                progress_node(node, values, runs[-1].duration_s if runs else None)
             recorder.record_state(values)
             recorder.record_telemetry(telemetry.summary())
         except OSError as exc:  # a full disk must not kill a run that can still finish
@@ -502,6 +550,7 @@ def run_case(case: BenchmarkCase, *, simulator, loop_settings: LoopSettings,
                 }
             else:
                 batch: AnswerBatch = simulator.answer(questions, values)
+                progress_round(len(transcript), questions, batch)
                 entry = {
                     "round": len(transcript),
                     "turn": values.get("turn"),
@@ -760,6 +809,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--score", action="store_true",
                    help="score the run against ground truth once it finishes "
                         "(same as running evals/run_scoring.py afterwards)")
+    p.add_argument("-q", "--quiet", action="store_true",
+                   help="one line per case instead of a live trace of every graph node "
+                        "and question round (the trace goes to stderr)")
     p.add_argument("--out", type=Path, help=f"results root (default: {RESULTS_DIR})")
 
     naming = p.add_mutually_exclusive_group()
@@ -822,7 +874,10 @@ def resolve_run_dir(args, results_dir: Path) -> Path | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global PROGRESS
+
     args = build_parser().parse_args(argv)
+    PROGRESS = not args.quiet
     results_dir = args.out or RESULTS_DIR
     resuming = args.resume is not None
 
@@ -905,7 +960,16 @@ def main(argv: list[str] | None = None) -> int:
         manifest = previous
     write_atomic(results_root / "manifest.json", _dumps(manifest))
 
-    print(f"run {run_id}: {len(cases)} case(s), mode={args.mode} -> {results_root}")
+    print(
+        f"run {run_id}: {len(cases)} case(s), mode={args.mode} (seed {args.seed}), "
+        f"model {effective_settings.llm.provider}/{effective_settings.llm.model}, "
+        f"max_turns {loop_settings.max_turns}, top_k {effective_settings.rag.top_k}"
+        + (", cache LLM" if args.cache else "")
+        + f" -> {results_root}",
+        # The per-case trace goes to stderr, which is unbuffered; without this the
+        # banner would surface after it whenever the two are piped together.
+        flush=True,
+    )
 
     # Keyed by case id and emitted in the run's own order, so a resume that fills
     # in the holes still writes the CSV in the dataset's order — and one that
@@ -929,11 +993,11 @@ def main(argv: list[str] | None = None) -> int:
     flush()  # an empty-but-valid summary.csv beats none at all
     interrupted: str | None = None
 
-    for case in cases:
+    for index, case in enumerate(cases, start=1):
         case_out = results_root / case.case_id
 
         if case.case_id in rows_by_case:
-            print(f"  - {case.case_id} ... déjà terminé, ignoré")
+            print(f"  - [{index}/{len(cases)}] {case.case_id} ... déjà terminé, ignoré")
             continue
 
         settings = harness.case_settings(
@@ -945,7 +1009,11 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=case_out / "artifacts",
         )
 
-        print(f"  - {case.case_id} ... ", end="", flush=True)
+        # With progress on, the case's own lines land between this header and its
+        # result, so the header gets its own line; without it, the result is
+        # appended inline as it always was.
+        print(f"  - [{index}/{len(cases)}] {case.case_id} ... ",
+              end="\n" if PROGRESS else "", flush=True)
         with CaseRecorder(case_out, resume=resuming) as recorder:
             recorder.record_status("running", started_at=datetime.now(timezone.utc).isoformat())
             # isolate() drops the memoized chat models, so a provider/model override
@@ -973,8 +1041,11 @@ def main(argv: list[str] | None = None) -> int:
         row = summarize(record)
         rows_by_case[case.case_id] = row
         print(
-            f"{row['status']} — {row['turns']} turn(s), {row['gaps_total']} gap(s), "
-            f"{row['questions_asked']} question(s), {row['wall_s']}s"
+            f"{'    => ' if PROGRESS else ''}{row['status']} — {row['turns']} turn(s), "
+            f"{row['gaps_total']} gap(s), {row['questions_asked']} question(s), "
+            f"RAG/humain/hypothèse {row['resolved_by_rag']}/{row['resolved_by_user']}/"
+            f"{row['assumed']}, {row['sections_complete']}/{row['sections_total']} section(s), "
+            f"{row['wall_s']}s"
         )
         if record["error"]:
             print(record["error"], file=sys.stderr)

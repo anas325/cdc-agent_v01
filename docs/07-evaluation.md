@@ -215,13 +215,42 @@ uv run python evals/run_benchmark.py --resume                        # reprend l
 
 Options : `--cases`, `--mode`, `--seed`, `--provider`, `--model`,
 `--temperature`, `--top-k`, `--max-turns`, `--max-questions-per-batch`,
-`--cache`, `--run-id`, `--out`, `--resume`, `--force`, `--keep-checkpoints`.
+`--cache`, `--score`, `--quiet`, `--run-id`, `--out`, `--resume`, `--force`,
+`--keep-checkpoints`.
 
 Pour chaque cas, le runner envoie exactement ce que `src/app.py::start_run`
 envoie (`initial_cdc_text`, `loop_settings`, `section_statuses`), consomme le
 flux jusqu'à l'interrupt, fait répondre le simulateur, reprend, et recommence
 jusqu'à `graph.get_state(config).next == ()`. Un cas qui échoue est enregistré
 avec sa trace (`status: "error"`) et le lot continue.
+
+### Suivre un run en direct
+
+Un cas à froid passe plusieurs minutes entre deux événements visibles, donc le
+runner se raconte au fil de l'eau plutôt que d'imprimer une ligne une fois le cas
+fini : un nœud de graphe par ligne (tour, nœud, section courante, durée) suivi
+des compteurs qui bougent — lacunes trouvées, lacunes encore ouvertes, questions
+posées, sections complètes — et, à chaque tour de questions, la question posée
+face à la réponse simulée avec son `reason`.
+
+```text
+    t 1 gap_filler         [problem]       1.2s  13 lacune(s), 13 ouverte(s), 0 question(s), 0/4 section(s)
+    — tour de questions 1 : 3 question(s)
+      Q Vous avez indiqué que le site doit améliorer l'expérience utilisateur…
+      R [matched] Cible : +15 % de chiffre d'affaires en ligne sur douze mois…
+    t 1 integrate_answers                  0.0s  13 lacune(s), 10 ouverte(s), 3 question(s), 0/4 section(s)
+```
+
+C'est là qu'on voit la boucle *fonctionner* : le nombre de lacunes ouvertes
+descend à mesure que les réponses sont intégrées, et un `reason` à répétition
+(`no_ground_truth`, `hedged`) explique tout de suite un cas qui n'avance pas.
+
+Cette trace va sur **stderr** ; `stdout` ne porte que la ligne de résultat par
+cas. `2>/dev/null` donne donc le résumé seul, et `1>/dev/null` la trace seule.
+`--quiet` la coupe et rend le format d'origine, une ligne par cas.
+
+`run_scoring.py` narre de même une ligne de score par cas pendant la notation —
+utile surtout avec `--judge llm`, qui dépense un appel par question posée.
 
 ### Isolation par cas
 

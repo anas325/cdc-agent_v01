@@ -451,6 +451,25 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def progress(line: str) -> None:
+    """Scoring is fast, but `--judge llm` spends a call per question — and even
+    offline, seeing each case's numbers land beats waiting for the totals."""
+    print(line, file=sys.stderr, flush=True)
+
+
+def _case_line(case_score: dict) -> str:
+    gaps = case_score["gaps"]
+    rag = case_score["retrieval"]
+    return (
+        f"      gaps {gaps['overall']['tp']}/{gaps['annotated']} found "
+        f"(P {gaps['overall']['precision']:.2f} R {gaps['overall']['recall']:.2f} "
+        f"F1 {gaps['overall']['f1']:.2f}) · blocking {_pct(gaps['blocking_recall'])} · "
+        f"contra F1 {case_score['contradictions']['overall']['f1']:.2f} · "
+        f"RAG {rag['attempted']}/{rag['annotated']} tried R@3 "
+        f"{_pct(rag['recall_at_k']['@3'])} · Q {_fmt(case_score['questions']['mean_score'])}/2"
+    )
+
+
 def score_run(results_root: Path, *, case_ids: list[str] | None = None,
               threshold: float = scoring.MATCH_THRESHOLD, judge: bool = False) -> dict:
     """Score one run directory and write its three artifacts. Returns scores.json."""
@@ -459,10 +478,18 @@ def score_run(results_root: Path, *, case_ids: list[str] | None = None,
     cases = load_benchmark(case_ids=selected or None)
 
     pairs, skipped = collect(results_root, cases)
-    case_scores = [
-        scoring.score_case(p["record"], p["case"].ground_truth, threshold, judge=judge)
-        for p in pairs
-    ]
+    for case_id in skipped:
+        progress(f"  - {case_id} ... pas de predictions.json, ignoré")
+
+    case_scores = []
+    for index, pair in enumerate(pairs, start=1):
+        case_id = pair["case"].case_id
+        progress(f"  - [{index}/{len(pairs)}] {case_id} ...")
+        case_scores.append(
+            scoring.score_case(pair["record"], pair["case"].ground_truth, threshold, judge=judge)
+        )
+        progress(_case_line(case_scores[-1]))
+
     totals = scoring.aggregate(case_scores)
 
     payload = {
@@ -506,6 +533,19 @@ def main(argv: list[str] | None = None) -> int:
     if not (results_root / "manifest.json").exists():
         print(f"No run at {results_root}.", file=sys.stderr)
         return 1
+
+    manifest = _read_json(results_root / "manifest.json") or {}
+    llm = manifest.get("llm") or {}
+    print(
+        f"scoring {results_root.name}: dataset {manifest.get('dataset_version')}, "
+        f"simulator {manifest.get('simulator_mode')} (seed {manifest.get('seed')}), "
+        f"model {llm.get('provider')}/{llm.get('model')}, "
+        f"scorer {scoring.SCORER_VERSION} @ threshold {args.threshold}"
+        + (", + LLM judge" if args.judge == "llm" else ""),
+        # The per-case trace goes to stderr, which is unbuffered; without this the
+        # banner would surface after it whenever the two are piped together.
+        flush=True,
+    )
 
     case_ids = [c.strip() for c in args.cases.split(",")] if args.cases else None
     payload = score_run(

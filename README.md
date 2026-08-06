@@ -92,6 +92,12 @@ manifest under `evals/results/<run_id>/`. Start with one case:
 uv run python evals/run_benchmark.py --cases cdc_003_ecommerce --cache
 ```
 
+A run narrates itself on stderr as it goes — one line per graph node with the
+counters that move (gaps found, gaps still open, questions asked, sections
+complete), plus each simulated question and answer — so you can watch the loop
+close gaps instead of waiting minutes for one summary line. `2>/dev/null` leaves
+just the per-case result; `--quiet` turns the trace off entirely.
+
 A full run is ten cases of several minutes, so it is written to disk as it goes —
 the graph checkpoint after every node, the transcript after every question round,
 `summary.csv` and `report.md` after every case — and can be picked back up:
