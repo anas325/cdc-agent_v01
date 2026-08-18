@@ -13,8 +13,12 @@ instead of silently replaying stale ones.
 from __future__ import annotations
 
 PROMPT_VERSIONS: dict[str, str] = {
-    "gap_finder.section": "v1",
-    "gap_finder.fresh": "v1",
+    # v2 : rubrique de sévérité sous forme de test de décision, garde-fou de
+    # périmètre (une rubrique absente n'est pas une lacune), forme imposée
+    # citation/deux lectures/question fermée, few-shots et auto-filtrage final.
+    # Calibré sur deux CDC Centrale Danone acceptés — cf. gap_finder_prompts.py.
+    "gap_finder.section": "v2",
+    "gap_finder.fresh": "v2",
     "gap_filler.rag_grade": "v1",
     "gap_filler.question": "v1",
     "gap_filler.assumption": "v1",
