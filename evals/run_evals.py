@@ -17,6 +17,22 @@ The gap_finder dataset carries two kinds of case, told apart by `mode`:
   `expected.resolved_gap_ids`, `expected.expected_new_gaps` (follow-ups that
   must be raised) and `expected.forbidden_new_gaps` (follow-ups that must not).
 
+Expectations are matched to predictions **by content**: an entry carries
+`keywords` (short, accent-insensitive French terms), and `keyword_score` /
+`MATCH_THRESHOLD` from evals/simulator.py decide the hit — the same matcher the
+benchmark scorer and the stakeholder oracle use, so the three can't drift. The
+predicted category is therefore *not* a matching criterion, and totals are
+reported twice:
+
+- **detection** — was the gap found at all, whatever it was labelled?
+- **strict** — found *and* filed under the annotated category.
+
+The two failures need opposite fixes (a miss means the finder isn't looking; a
+mislabel means the category definitions in the prompt are blurred), so a single
+blended F1 hides which one is happening. Their difference is printed as
+`mislabeled`, and per case a detected-but-mislabelled expectation is marked
+`CAT?` rather than `MISS`.
+
 Usage:
     python evals/run_evals.py                       # both datasets, config/settings.yaml provider
     python evals/run_evals.py --provider anthropic   # override llm.provider for this run
@@ -38,6 +54,8 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 from evals.harness import override_llm_provider  # noqa: E402
+from evals.scoring import greedy_assign  # noqa: E402
+from evals.simulator import MATCH_THRESHOLD, keyword_score  # noqa: E402
 from src.agents import critic as critic_module  # noqa: E402
 from src.agents import gap_finder as gap_finder_module  # noqa: E402
 from src.state import ContextItem, Gap, SectionConfig, SectionStatus  # noqa: E402
@@ -203,55 +221,138 @@ def format_gap(g: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def matches(spec: dict, pred: dict) -> bool:
+def gap_haystack(pred: dict) -> str:
+    """Everything a prediction says about itself, for keyword matching."""
+    return " ".join(
+        [pred.get("description", ""), pred.get("category") or "", *(pred.get("section_ids") or [])]
+    )
+
+
+def category_ok(spec: dict, pred: dict) -> bool:
+    """Did the prediction file the finding under the annotated category?
+
+    A spec that declares no category agrees with anything — there is nothing to
+    disagree with.
+    """
+    return not spec.get("category") or spec["category"] == pred.get("category")
+
+
+def matches(spec: dict, pred: dict, *, ignore_category: bool = False) -> bool:
     """Does `pred` satisfy the annotation `spec`?
 
     Every field of the spec is optional and only constrains when present, so
-    the same predicate serves both expectations and prohibitions. `must_quote`
-    is the one hard filter: a gap that doesn't name the offending term is not
-    the gap that was annotated. A prediction with no follow_up_of_gap_id at all
-    still matches — small models routinely omit the field.
+    the same predicate serves both expectations and prohibitions. `keywords` is
+    what identifies the finding — content, scored exactly as the benchmark
+    scorer and the stakeholder oracle score it. `must_quote` is a hard filter on
+    top: a gap that doesn't name the offending term is not the gap that was
+    annotated. A prediction with no follow_up_of_gap_id at all still matches —
+    small models routinely omit the field.
+
+    `ignore_category` drops the category constraint, which is how expectations
+    are matched: a found-but-mislabelled gap belongs in the pairs, not in the
+    misses. It is honoured only when the spec carries `keywords`; with no
+    content evidence the category is the only thing identifying the finding, so
+    keyword-less specs (every `forbidden_gaps` entry, the critic dataset) keep
+    matching exactly as they did.
     """
-    if spec.get("category") and spec["category"] != pred["category"]:
-        return False
     if spec.get("must_quote") and spec["must_quote"] not in pred["description"]:
         return False
     want_follow_up = spec.get("follow_up_of_gap_id")
     if want_follow_up and pred.get("follow_up_of_gap_id") not in (None, want_follow_up):
         return False
-    return True
+    if spec.get("keywords"):
+        if keyword_score(spec["keywords"], gap_haystack(pred)) < MATCH_THRESHOLD:
+            return False
+    else:
+        ignore_category = False
+    return ignore_category or category_ok(spec, pred)
 
 
 def match_gaps(expected: list[dict], actual: list[dict]) -> tuple[list[tuple[dict, dict | None]], list[dict]]:
-    """Greedily pair each expectation with one unused prediction.
+    """Pair each expectation with one prediction, best content match first.
+
+    Category is deliberately not a matching criterion (see `matches`): pairing
+    on content is what lets the caller tell "never found" from "found, wrong
+    label". The assignment reuses evals/scoring.py's `greedy_assign`, so both
+    harnesses resolve competing matches the same way.
 
     Returns the pairs (prediction None when missed) and the predictions left
     over — the latter are candidate false positives, always printed for review.
     """
-    remaining = list(actual)
-    pairs: list[tuple[dict, dict | None]] = []
-    for exp in expected:
-        hit = next((a for a in remaining if matches(exp, a)), None)
-        if hit is not None:
-            remaining.remove(hit)
-        pairs.append((exp, hit))
-    return pairs, remaining
+    exp_ids = [f"exp_{i}" for i in range(len(expected))]
+    pred_ids = [f"pred_{i}" for i in range(len(actual))]
+
+    candidates = [
+        (keyword_score(exp.get("keywords") or [], gap_haystack(pred)), eid, pid)
+        for eid, exp in zip(exp_ids, expected)
+        for pid, pred in zip(pred_ids, actual)
+        if matches(exp, pred, ignore_category=True)
+    ]
+    result = greedy_assign(candidates, exp_ids, pred_ids)
+
+    by_id = dict(zip(pred_ids, actual))
+    pairs = [(exp, by_id.get(result.pairs.get(eid))) for eid, exp in zip(exp_ids, expected)]
+    return pairs, [by_id[pid] for pid in result.spurious]
 
 
-def aggregate(totals: dict) -> dict:
-    hits, expected, actual = totals["hits"], totals["expected"], totals["actual"]
+def count_hits(pairs: list[tuple[dict, dict | None]]) -> tuple[int, int]:
+    """(detected, detected *and* filed under the annotated category)."""
+    matched = [(e, a) for e, a in pairs if a is not None]
+    return len(matched), sum(1 for e, a in matched if category_ok(e, a))
+
+
+def hit_mark(exp: dict, act: dict | None) -> str:
+    """MISS = never found, CAT? = found under another category, HIT = both right."""
+    if act is None:
+        return "MISS"
+    return "HIT " if category_ok(exp, act) else "CAT?"
+
+
+def prf(hits: int, expected: int, actual: int) -> dict:
     precision = hits / actual if actual else 1.0
     recall = hits / expected if expected else 1.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
-    return {"precision": precision, "recall": recall, "f1": f1}
+    return {"precision": precision, "recall": recall, "f1": f1, "hits": hits}
+
+
+def aggregate(totals: dict) -> dict:
+    """Two readings of the same run, never blended into one number.
+
+    `detection` ignores the predicted category — was the gap surfaced at all?
+    `strict` also requires the annotated category. Their difference is the
+    mislabel count, and the two failures call for opposite fixes: a miss means
+    the finder isn't looking there, a mislabel means the category definitions in
+    the prompt are blurred (or the annotation is).
+    """
+    expected, actual = totals["expected"], totals["actual"]
+    detection = prf(totals["hits"], expected, actual)
+    strict = prf(totals["strict_hits"], expected, actual)
+    return {
+        "detection": detection,
+        "strict": strict,
+        "mislabeled": totals["hits"] - totals["strict_hits"],
+        "category_agreement": (totals["strict_hits"] / totals["hits"]) if totals["hits"] else None,
+    }
+
+
+def format_metrics(metrics: dict) -> list[str]:
+    lines = [
+        f"  {name:<10} precision={m['precision']:.2f} recall={m['recall']:.2f} "
+        f"f1={m['f1']:.2f} (hits={m['hits']})"
+        for name, m in ((n, metrics[n]) for n in ("detection", "strict"))
+    ]
+    agreement = metrics["category_agreement"]
+    lines.append(
+        f"  mislabeled={metrics['mislabeled']} (detected, wrong category)"
+        + (f", category agreement={agreement:.2f}" if agreement is not None else "")
+    )
+    return lines
 
 
 def print_totals(name: str, totals: dict) -> None:
-    metrics = aggregate(totals)
-    print(
-        f"\n{name} TOTALS: precision={metrics['precision']:.2f} recall={metrics['recall']:.2f} "
-        f"f1={metrics['f1']:.2f} (hits={totals['hits']}, expected={totals['expected']}, actual={totals['actual']})"
-    )
+    print(f"\n{name} TOTALS: expected={totals['expected']}, actual={totals['actual']}")
+    for line in format_metrics(aggregate(totals)):
+        print(line)
     extras = [f"{k}={totals[k]}" for k in ("forbidden", "over_cap", "wrong_sections") if totals.get(k)]
     if extras:
         print("  violations: " + ", ".join(extras))
@@ -269,7 +370,7 @@ def run_section_case(case: dict, totals: dict) -> None:
     expected = case.get("expected_gaps", [])
 
     pairs, unmatched = match_gaps(expected, actual)
-    hits = sum(1 for _, a in pairs if a is not None)
+    hits, strict_hits = count_hits(pairs)
 
     forbidden = [f for f in case.get("forbidden_gaps", [])]
     violations = [(f, a) for f in forbidden for a in unmatched if matches(f, a)]
@@ -285,6 +386,7 @@ def run_section_case(case: dict, totals: dict) -> None:
     ]
 
     totals["hits"] += hits
+    totals["strict_hits"] += strict_hits
     totals["expected"] += len(expected)
     totals["actual"] += len(actual)
     totals["forbidden"] += len(violations)
@@ -295,8 +397,10 @@ def run_section_case(case: dict, totals: dict) -> None:
     print(f"\n-- {case['case_id']} -- (section mode, section={section_id})")
     print(f"expected ({len(expected)}):")
     for exp, act in pairs:
-        mark = "HIT " if act is not None else "MISS"
+        mark = hit_mark(exp, act)
         print(f"  [{mark}] [{exp.get('category')}/{exp.get('severity', '?')}] {exp['description']}")
+        if mark == "CAT?":
+            print(f"         found, but labelled '{act['category']}': {act['description']}")
     if not expected:
         print("  (none — precision control case)")
     print(f"actual ({len(actual)}):")
@@ -310,7 +414,10 @@ def run_section_case(case: dict, totals: dict) -> None:
         print(f"  !! cap exceeded: {len(actual)} gaps > max_gaps={max_gaps}")
     for exp, a in wrong_sections:
         print(f"  !! sections {a['section_ids']} miss expected {exp['expected_section_ids']}")
-    print(f"case hits={hits}/{len(expected)} (actual={len(actual)}, unmatched={len(unmatched)})")
+    print(
+        f"case detected={hits}/{len(expected)} strict={strict_hits}/{len(expected)} "
+        f"(actual={len(actual)}, unmatched={len(unmatched)})"
+    )
 
 
 def run_fresh_case(case: dict, totals: dict) -> None:
@@ -326,7 +433,7 @@ def run_fresh_case(case: dict, totals: dict) -> None:
 
     exp_new = expected.get("expected_new_gaps", [])
     pairs, unmatched = match_gaps(exp_new, actual)
-    new_hits = sum(1 for _, a in pairs if a is not None)
+    new_hits, strict_new_hits = count_hits(pairs)
 
     forbidden = expected.get("forbidden_new_gaps", [])
     violations = [(f, a) for f in forbidden for a in unmatched if matches(f, a)]
@@ -335,6 +442,7 @@ def run_fresh_case(case: dict, totals: dict) -> None:
     totals["resolved_expected"] += len(exp_resolved)
     totals["resolved_spurious"] += len(spurious_resolved)
     totals["hits"] += new_hits
+    totals["strict_hits"] += strict_new_hits
     totals["expected"] += len(exp_new)
     totals["actual"] += len(actual)
     totals["forbidden"] += len(violations)
@@ -348,8 +456,10 @@ def run_fresh_case(case: dict, totals: dict) -> None:
         print(f"  !! resolved but shouldn't be: {gid}")
     print(f"expected follow-up gaps ({len(exp_new)}):")
     for exp, act in pairs:
-        mark = "HIT " if act is not None else "MISS"
+        mark = hit_mark(exp, act)
         print(f"  [{mark}] {exp.get('description', exp)}")
+        if mark == "CAT?":
+            print(f"         found, but labelled '{act['category']}': {act['description']}")
     if not exp_new:
         print("  (none)")
     print(f"actual ({len(actual)}):")
@@ -361,18 +471,19 @@ def run_fresh_case(case: dict, totals: dict) -> None:
         print(f"  !! forbidden follow-up ({spec.get('reason', '')}): {a['description']}")
     print(
         f"case resolved={resolved_hits}/{len(exp_resolved)} "
-        f"follow_ups={new_hits}/{len(exp_new)} (actual={len(actual)}, unmatched={len(unmatched)})"
+        f"follow_ups detected={new_hits}/{len(exp_new)} strict={strict_new_hits}/{len(exp_new)} "
+        f"(actual={len(actual)}, unmatched={len(unmatched)})"
     )
 
 
 def print_fresh_totals(name: str, totals: dict) -> None:
-    metrics = aggregate(totals)
     print(
         f"\n{name} TOTALS: resolutions={totals['resolved_hits']}/{totals['resolved_expected']} "
-        f"(spurious={totals['resolved_spurious']}) | follow-ups precision={metrics['precision']:.2f} "
-        f"recall={metrics['recall']:.2f} f1={metrics['f1']:.2f} "
-        f"(hits={totals['hits']}, expected={totals['expected']}, actual={totals['actual']})"
+        f"(spurious={totals['resolved_spurious']}) | follow-ups: "
+        f"expected={totals['expected']}, actual={totals['actual']}"
     )
+    for line in format_metrics(aggregate(totals)):
+        print(line)
     if totals["forbidden"]:
         print(f"  violations: forbidden={totals['forbidden']}")
 
@@ -395,11 +506,11 @@ def load_jsonl(path: Path) -> list[dict]:
 def run_gap_finder_dataset(path: Path) -> None:
     print(f"\n=== gap_finder: {path.name} ===")
     section_totals = {
-        "hits": 0, "expected": 0, "actual": 0,
+        "hits": 0, "strict_hits": 0, "expected": 0, "actual": 0,
         "forbidden": 0, "over_cap": 0, "wrong_sections": 0, "cases": 0,
     }
     fresh_totals = {
-        "hits": 0, "expected": 0, "actual": 0, "forbidden": 0, "cases": 0,
+        "hits": 0, "strict_hits": 0, "expected": 0, "actual": 0, "forbidden": 0, "cases": 0,
         "resolved_hits": 0, "resolved_expected": 0, "resolved_spurious": 0,
     }
 
@@ -417,16 +528,23 @@ def run_gap_finder_dataset(path: Path) -> None:
 
 def run_critic_dataset(path: Path) -> None:
     print(f"\n=== critic: {path.name} ===")
-    totals = {"hits": 0, "expected": 0, "actual": 0, "cases": 0}
+    totals = {"hits": 0, "strict_hits": 0, "expected": 0, "actual": 0, "cases": 0}
     for case in load_jsonl(path):
         state, fresh_item_ids = build_critic_state(case)
         result = critic_module.run_critic(state, fresh_item_ids=fresh_item_ids)
         actual = [{"category": "contradiction", "description": g.description} for g in result.new_gaps]
-        expected = [{"category": "contradiction", "description": e["description"]} for e in case["expected_contradictions"]]
+        expected = [
+            {"category": "contradiction", "description": e["description"], "keywords": e.get("keywords")}
+            for e in case["expected_contradictions"]
+        ]
 
+        # Everything the critic emits is a contradiction, so here the two
+        # readings coincide: detection and strict can only differ where the
+        # annotation discriminates categories.
         pairs, unmatched = match_gaps(expected, actual)
-        hits = sum(1 for _, a in pairs if a is not None)
+        hits, strict_hits = count_hits(pairs)
         totals["hits"] += hits
+        totals["strict_hits"] += strict_hits
         totals["expected"] += len(expected)
         totals["actual"] += len(actual)
         totals["cases"] += 1
