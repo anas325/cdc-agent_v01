@@ -59,6 +59,7 @@ from src import telemetry  # noqa: E402
 from src.config import load_sections, load_settings  # noqa: E402
 from src.graph import build_graph  # noqa: E402
 from src.state import LoopSettings, SectionStatus  # noqa: E402
+from src.utils import notify as telegram  # noqa: E402
 
 RESULTS_DIR = ROOT / "evals" / "results"
 
@@ -324,6 +325,18 @@ def load_case_row(case_out: Path) -> dict | None:
 # goes to stderr: stdout stays the summary a caller might want to pipe, and a
 # redirected log keeps the two apart.
 PROGRESS = True
+
+# Les updates Telegram sont un doublon volontairement pauvre de la trace : seuls
+# le début, les échecs et la fin du run y passent, parce qu'ils se lisent sur un
+# téléphone pendant les deux heures où personne ne regarde le terminal. Sans
+# credentials dans src/.env l'envoi est un no-op, donc --no-notify ne sert qu'à
+# les couper pour un run qu'on suit en direct.
+NOTIFY = True
+
+
+def notify(line: str) -> None:
+    if NOTIFY:
+        telegram.send_message(line)
 
 
 def progress(line: str, *, indent: int = 4) -> None:
@@ -809,6 +822,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--score", action="store_true",
                    help="score the run against ground truth once it finishes "
                         "(same as running evals/run_scoring.py afterwards)")
+    p.add_argument("--no-notify", action="store_true",
+                   help="ne pas envoyer les updates Telegram (début / échec / fin de run)")
     p.add_argument("-q", "--quiet", action="store_true",
                    help="one line per case instead of a live trace of every graph node "
                         "and question round (the trace goes to stderr)")
@@ -874,10 +889,11 @@ def resolve_run_dir(args, results_dir: Path) -> Path | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    global PROGRESS
+    global PROGRESS, NOTIFY
 
     args = build_parser().parse_args(argv)
     PROGRESS = not args.quiet
+    NOTIFY = not args.no_notify
     results_dir = args.out or RESULTS_DIR
     resuming = args.resume is not None
 
@@ -934,6 +950,7 @@ def main(argv: list[str] | None = None) -> int:
     ).model_copy(update={"loop": loop_settings})
 
     started_at = datetime.now(timezone.utc).isoformat()
+    run_t0 = time.time()
     manifest = harness.run_manifest(
         run_id=run_id,
         dataset_version=dataset_version(),
@@ -969,6 +986,11 @@ def main(argv: list[str] | None = None) -> int:
         # The per-case trace goes to stderr, which is unbuffered; without this the
         # banner would surface after it whenever the two are piped together.
         flush=True,
+    )
+    notify(
+        f"benchmark {run_id} demarre — {len(cases)} cas, mode={args.mode}, "
+        f"{effective_settings.llm.provider}/{effective_settings.llm.model}"
+        + (" (reprise)" if resuming else "")
     )
 
     # Keyed by case id and emitted in the run's own order, so a resume that fills
@@ -1035,6 +1057,10 @@ def main(argv: list[str] | None = None) -> int:
                 recorder.record_status("interrupted")
                 interrupted = case.case_id
                 print("interrompu")
+                notify(
+                    f"benchmark {run_id} interrompu pendant {case.case_id} "
+                    f"— reprendre avec : --resume {run_id}"
+                )
                 break
             recorder.finish(record, keep_checkpoints=args.keep_checkpoints)
 
@@ -1049,10 +1075,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         if record["error"]:
             print(record["error"], file=sys.stderr)
+            # Première ligne seulement : la trace complète est dans le run.
+            notify(
+                f"ECHEC {case.case_id} [{index}/{len(cases)}] dans {run_id} : "
+                + (record["error"].strip().splitlines() or ["?"])[0]
+            )
         flush()
 
     flush()
     print(f"\nwrote {results_root}")
+
+    if not interrupted:
+        done = [rows_by_case[cid] for cid in run_case_ids if cid in rows_by_case]
+        ko = [r["case_id"] for r in done if r["status"] == "error"]
+        notify(
+            f"benchmark {run_id} termine — {len(done) - len(ko)}/{len(done)} cas OK "
+            f"en {(time.time() - run_t0) / 60:.0f} min"
+            + (f", echecs : {', '.join(ko)}" if ko else "")
+        )
 
     # Scoring is a separate, re-runnable pass by design (evals/run_scoring.py);
     # this is only the convenience of not having to type the second command. An
