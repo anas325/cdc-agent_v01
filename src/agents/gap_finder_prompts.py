@@ -1,4 +1,4 @@
-"""Prompts du gap-finder — v3.
+"""Prompts du gap-finder — v4.
 
 Problème traité
 ---------------
@@ -7,25 +7,26 @@ acceptés ne contiennent NI prix, NI planning, NI plan de recette, NI stack tech
 NI hébergement, NI modèle de données, NI contrat d'API, NI la moindre exigence non
 fonctionnelle chiffrée. Ils contiennent en revanche de vraies ambiguïtés bloquantes à
 l'intérieur des exigences qu'ils engagent. Le discriminant n'est donc pas « cette
-rubrique est-elle présente ? » mais « le texte engagé admet-il deux implémentations ? ».
+rubrique est-elle présente ? » mais « le texte engagé laisse-t-il un choix
+d'implémentation ouvert ? ».
 
-Évolutions vs v2
+Évolutions vs v3
 ----------------
-1. GROUNDING_TEST   — la « double lecture » n'est retenue que si les DEUX lectures
-                      s'appuient sur du texte réellement présent. En v2, la forme
-                      imposée (citation + deux lectures) fonctionnait comme un
-                      générateur : deux lectures s'inventent pour n'importe quelle
-                      phrase, donc le filtre ne filtrait rien.
-2. CATEGORY_GUIDE   — un test décisif par catégorie. En v2 les few-shots ne
-                      démontraient que business_rule/contradiction, et le modèle
-                      recopiait cette distribution de labels quel que soit le fond.
-3. Few-shots négatifs reformulés en FORMES de piège, sans citer le passage fautif :
-                      nommer un extrait pour dire « ne le remonte pas » l'amorce au
-                      lieu de l'écarter.
-4. Plafond ramené de 5 à 3, avec l'attendu explicite « 0 à 2 sur une section saine ».
-5. Matériel des few-shots renouvelé — il ne doit recouper AUCUN cas de
-   `evals/datasets/gap_finder.jsonl`, sous peine de rendre l'éval inutilisable
-   (le modèle y récite la réponse au lieu de la trouver).
+1. La « double lecture » (lecture A / lecture B) disparaît — du test d'ancrage, de la
+   forme imposée, des few-shots et du critère de résolution. Le graphe tourne sur un
+   modèle 20b : lui faire rédiger deux lectures concurrentes pour chaque lacune coûtait
+   du raisonnement sans rien filtrer (la forme s'obtient toujours, y compris sur une
+   section saine) et allongeait chaque description. Le discriminant est maintenant
+   direct : un élément précis est laissé indéterminé, et le résultat observable en dépend.
+2. Le test d'ancrage porte désormais sur l'engagement du document (deux passages opposés,
+   une règle promise sans moyen de l'obtenir, un critère de la checklist resté sans
+   réponse) et sur un seul contre-test : ai-je dû supposer un mécanisme absent du document ?
+3. Descriptions ramenées à 3 lignes : citation, ce qui est indéterminé et sa conséquence,
+   question fermée.
+
+Inchangé depuis v3 : le guide de catégorisation par test décisif, les few-shots négatifs
+décrits par leur forme, le plafond de 3 lacunes par section, et le matériel des few-shots
+disjoint du jeu d'évaluation.
 
 Les libellés de sévérité employés ici sont ceux de `GapSeverity` (src/state.py) :
 "blocking" / "important" / "nice_to_have". `FEWSHOT_ENABLED` permet d'A/B tester les
@@ -67,10 +68,11 @@ GAP_TAXONOMY = [
 SEVERITY_RUBRIC = """RÈGLE DE SÉVÉRITÉ (test de décision, à appliquer littéralement) :
 Question de référence : « un développeur qui lit UNIQUEMENT ce CDC peut-il coder cette
 fonctionnalité et avoir raison ? »
-- "blocking" : il existe au moins DEUX lectures du texte menant à DEUX implémentations
-  incompatibles (formule de calcul, clé d'enregistrement, périmètre d'agrégation, source de
-  vérité d'une donnée). Le choix ne peut pas être tranché par l'équipe technique seule, et
-  une erreur de choix est silencieuse (le système fonctionne mais affiche un faux chiffre).
+- "blocking" : le texte laisse indéterminé un élément dont dépend le résultat produit
+  (formule de calcul, clé d'enregistrement, périmètre d'agrégation, source de vérité d'une
+  donnée). Deux équipes qui codent honnêtement obtiennent des résultats différents. Le choix
+  ne peut pas être tranché par l'équipe technique seule, et une erreur de choix est
+  silencieuse (le système fonctionne mais affiche un faux chiffre).
 - "important" : l'implémentation est possible avec une hypothèse raisonnable, mais cette
   hypothèse change un comportement visible par l'utilisateur (règle de conflit, automatique
   vs manuel, droits d'accès) et doit être confirmée par le métier.
@@ -80,21 +82,19 @@ Ne classe JAMAIS en "blocking" l'absence d'une rubrique entière (cf. HORS PÉRI
 
 
 GROUNDING_TEST = """TEST D'ANCRAGE (le plus important — applique-le avant tout le reste) :
-Deux lectures s'inventent pour n'importe quelle phrase. Ce n'est donc PAS parce que tu
-sais formuler une lecture A et une lecture B qu'il y a une lacune.
-Une double lecture ne compte QUE si elle est ancrée dans un engagement réellement pris :
+Une lacune ne compte QUE si elle porte sur un engagement réellement pris par le document :
 - soit le document dit deux choses qui tirent dans des sens opposés (deux passages),
-- soit le document engage une règle, un calcul ou un indicateur dont le résultat change
-  selon la lecture retenue (un passage qui promet un résultat sans donner le moyen),
+- soit le document engage une règle, un calcul ou un indicateur sans donner le moyen de
+  l'obtenir : il promet un résultat, pas la manière de le produire,
 - soit un critère de complétude de la section (la checklist qui t'est fournie) est resté
   sans réponse : la section s'est engagée à le traiter, son absence n'est donc pas un
   silence mais une promesse non tenue. C'est le seul cas où une rubrique manquante est
   une lacune, et il l'emporte alors sur HORS PÉRIMÈTRE.
-Contre-test à appliquer systématiquement : « pour rendre ma lecture B plausible, ai-je dû
-ajouter une hypothèse que le document n'évoque nulle part ? » Si oui, ta lecture B est une
-invention de ta part : SUPPRIME la lacune. Le silence du document sur un sujet qu'il n'a
-jamais engagé n'est pas une ambiguïté — c'est un sujet hors périmètre.
-Exemples de lectures NON ancrées, à supprimer : imaginer un canal de notification (mail,
+Contre-test à appliquer systématiquement : « pour que ma lacune tienne, ai-je dû supposer
+un mécanisme dont le document ne parle nulle part ? » Si oui, la lacune est une invention
+de ta part : SUPPRIME-la. Le silence du document sur un sujet qu'il n'a jamais engagé n'est
+pas une ambiguïté — c'est un sujet hors périmètre.
+Exemples de lacunes NON ancrées, à supprimer : imaginer un canal de notification (mail,
 SMS) quand le document ne parle que d'affichage ; imaginer un profil habilité alors que le
 document ne restreint personne ; imaginer un état de cycle de vie supplémentaire alors que
 le document en énumère la liste."""
@@ -143,10 +143,10 @@ toutes les valeurs de la taxonomie sont également recevables."""
 
 GAP_QUALITY_RULES = """FORME OBLIGATOIRE DE CHAQUE LACUNE (champ description) :
 1. COMMENCE par le passage exact du document, entre guillemets (une phrase maximum).
-2. Énonce les DEUX lectures, chacune avec sa conséquence concrète sur le code ou sur le
-   chiffre affiché, et chacune rattachable à du texte présent (cf. TEST D'ANCRAGE).
+2. Dis en UNE phrase ce que le texte laisse indéterminé, et la conséquence concrète sur le
+   code ou sur le chiffre affiché.
 3. Termine par UNE question fermée, répondable en une phrase par un responsable métier.
-Reste compact : 4 à 6 lignes au total, pas de paragraphes aérés.
+Reste compact : 3 lignes au total, pas de paragraphes aérés, pas de raisonnement rédigé.
 Interdits : reformuler un critère de la checklist en question (« les rôles ne sont pas
 détaillés »), demander « davantage de précisions », produire une lacune sans citation,
 ou fusionner plusieurs problèmes dans une seule lacune."""
@@ -154,8 +154,8 @@ ou fusionner plusieurs problèmes dans une seule lacune."""
 
 SELF_CHECK = """AVANT DE RÉPONDRE, filtre ta propre liste. Pour chaque lacune candidate :
 (a) puis-je citer le passage exact ? sinon → supprime-la ;
-(b) mes deux lectures passent-elles le TEST D'ANCRAGE, ou ai-je ajouté une hypothèse
-    absente du document ? si ajoutée → supprime-la ;
+(b) la lacune passe-t-elle le TEST D'ANCRAGE, ou ai-je supposé un mécanisme absent du
+    document ? si supposé → supprime-la ;
 (c) la catégorie choisie est-elle celle dont le test décisif est vrai (cf. CHOIX DE LA
     CATÉGORIE) ? sinon → corrige-la ;
 (d) la question est-elle répondable en une phrase par un métier ? sinon → reformule ;
@@ -185,61 +185,55 @@ mais jamais défini.
 Extrait : « La quantité facturée au producteur est le litrage corrigé selon le taux de
 référence. »
 Lacune : « "taux de référence" n'est défini nulle part et le document ne dit pas où il est
-stocké. Lecture A : c'est une constante unique paramétrée pour toute la laiterie, la
-correction est alors la même pour tous. Lecture B : il est porté par le contrat de chaque
-producteur, la correction devient un calcul par ligne. Les deux produisent une facture
-différente sans erreur visible. Question : le taux de référence est-il une constante unique
-ou une valeur portée par le contrat de chaque producteur ? »
+stocké : constante unique pour la laiterie ou valeur portée par le contrat de chaque
+producteur, la facture n'est pas la même et l'écart reste invisible. Question : le taux de
+référence est-il une constante unique ou une valeur portée par le contrat de chaque
+producteur ? »
 
 [2] catégorie "scope", sévérité "blocking" — périmètre de remplacement indéterminé.
 Extrait : « Le module remplace le suivi Excel actuel des tournées. »
-Lacune : « Lecture A : le remplacement est total, le fichier est retiré à la mise en
-service et toutes ses colonnes doivent être reprises, y compris celles que ce document ne
-décrit pas. Lecture B : le remplacement est partiel, le fichier reste en usage pour les cas
-non couverts et seules les colonnes décrites ici sont à développer. Le périmètre à chiffrer
-change du simple au double. Question : le fichier Excel est-il retiré à la mise en service,
-ou reste-t-il en usage pour les cas non couverts ? »
+Lacune : « Le document ne dit pas si le fichier disparaît à la mise en service — auquel cas
+toutes ses colonnes sont à reprendre, y compris celles qu'il ne décrit pas — ou s'il reste
+en usage pour les cas non couverts ; le périmètre à chiffrer change du simple au double.
+Question : le fichier Excel est-il retiré à la mise en service, ou reste-t-il en usage pour
+les cas non couverts ? »
 
 [3] catégorie "data_model", sévérité "blocking" — granularité d'enregistrement dont dépend
 un indicateur promis par le document.
 Extraits : « Un indicateur affiche le taux de non-conformité par tournée » et « Les
 prélèvements sont analysés par citerne ».
 Lacune : « La non-conformité est constatée par citerne mais restituée par tournée, et le
-document ne dit pas comment passer de l'une à l'autre. Lecture A : une tournée remplit une
-seule citerne, le taux est un rapport direct. Lecture B : une tournée peut en remplir
-plusieurs, il faut alors une règle de répartition entre producteurs collectés. Question :
-une tournée correspond-elle toujours à une citerne unique, et sinon comment la
+document ne dit pas comment passer de l'une à l'autre : sans cardinalité fixée il manque une
+règle de répartition entre producteurs collectés, et le taux affiché est arbitraire.
+Question : une tournée correspond-elle toujours à une citerne unique, et sinon comment la
 non-conformité est-elle imputée ? »
 
-[4] catégorie "integration", sévérité "blocking" — sens d'échange non fixé entre deux
+[4] catégorie "integration", sévérité "blocking" — source de vérité non fixée entre deux
 systèmes tous deux nommés par le document.
 Extraits : « Les producteurs et leurs contrats sont repris depuis le référentiel Agri » et
 « L'utilisateur peut créer un producteur depuis l'écran de saisie ».
-Lacune : « Lecture A : Agri reste maître, la création locale est une fiche provisoire à
-réconcilier, et il faut gérer les doublons au retour. Lecture B : l'application devient
-maître après reprise, Agri n'est alimenté qu'une fois. Question : après la mise en service,
-quel système fait foi sur la fiche producteur ? »
+Lacune : « Le document nomme les deux systèmes sans dire lequel fait foi après la reprise :
+si Agri reste maître, la création locale est une fiche provisoire à réconcilier et les
+doublons sont à traiter au retour ; sinon Agri n'est alimenté qu'une fois. Question : après
+la mise en service, quel système fait foi sur la fiche producteur ? »
 
 [5] catégorie "business_rule", sévérité "important" — comportement attendu dans un cas que
 le texte prévoit lui-même, mais laisse indéterminé.
 Extrait : « Le chauffeur valide la pesée ; en cas d'écart avec le bon de livraison, l'écart
 est signalé. »
-Lacune : « Lecture A : le signalement est bloquant, le chauffeur ne peut pas valider tant
-que l'écart n'est pas justifié. Lecture B : le signalement est informatif, la validation
-passe et l'écart est tracé pour contrôle a posteriori. Le parcours terrain diffère.
-Question : un écart signalé empêche-t-il la validation de la pesée, ou est-il seulement
-enregistré ? »
+Lacune : « Le texte prévoit le signalement sans dire s'il bloque la validation tant que
+l'écart n'est pas justifié, ou s'il est seulement tracé pour contrôle a posteriori ; le
+parcours terrain diffère. Question : un écart signalé empêche-t-il la validation de la
+pesée, ou est-il seulement enregistré ? »
 
 [6] catégorie "contradiction", sévérité "blocking" — deux sections s'excluent.
 Extraits : § planning « Une tournée est clôturée par le chauffeur en fin de journée » et
 § supervision « La clôture d'une tournée est prononcée par le planificateur après
 contrôle ».
-Lacune : « Deux acteurs différents détiennent la même transition d'état. Lecture A : le
-chauffeur clôture, le contrôle du planificateur est postérieur et ne bloque rien. Lecture B :
-le chauffeur ne fait que déclarer la fin, l'état clôturé n'est atteint qu'après contrôle,
-ce qui ajoute un état intermédiaire au modèle. Question : qui prononce la clôture d'une
-tournée, et existe-t-il un état intermédiaire entre "déclarée terminée" et "clôturée" ? »
-(section_ids doit lister LES DEUX sections)
+Lacune : « Deux acteurs différents détiennent la même transition d'état, et selon celui qui
+tranche le modèle comporte ou non un état intermédiaire entre fin déclarée et clôture.
+Question : qui prononce la clôture d'une tournée, et existe-t-il un état intermédiaire entre
+"déclarée terminée" et "clôturée" ? » (section_ids doit lister LES DEUX sections)
 
 PIÈGES FRÉQUENTS — FORMES DE FAUSSES LACUNES À NE PAS REMONTER (décrites par leur forme,
 à reconnaître dans le texte que tu analyses) :
@@ -263,8 +257,8 @@ sont pas détaillés : la clause de repli est la réponse.
 [N7] Le document énumère une liste (états, rôles, colonnes, canaux) et tu songes à demander
 si un élément supplémentaire manque. → l'énumération fait foi. Une liste close n'est pas
 une liste incomplète.
-[N8] Ta lecture B n'existe que parce que tu as ajouté un mécanisme dont le document ne
-parle jamais (un canal d'envoi, un droit, un état, un système tiers).
+[N8] Ta lacune n'existe que parce que tu as ajouté un mécanisme dont le document ne parle
+jamais (un canal d'envoi, un droit, un état, un système tiers).
 → invention. Supprime-la, quelle que soit sa vraisemblance métier."""
 
 
@@ -279,7 +273,7 @@ Lacune : qui prononce la clôture d'une tournée (chauffeur ou planificateur) ?
 Nouvel élément (USER_ANSWER) : « La clôture est prononcée par le planificateur après
 contrôle ; le chauffeur ne fait que déclarer la fin de tournée, ce qui met la tournée en
 état "à contrôler". »
-→ Les deux lectures sont tranchées et l'état intermédiaire est nommé.
+→ L'acteur est tranché et l'état intermédiaire est nommé : plus rien à choisir pour coder.
 resolved_gap_ids += [gap_id]. Aucun gap de suivi.
 
 [R2] RÉSOUT PARTIELLEMENT → gap de suivi
@@ -304,10 +298,10 @@ répartition nécessaire au calcul. Créer un gap de catégorie "contradiction",
 "blocking", section_ids listant toutes les sections concernées. NE PAS marquer résolu.
 
 [R5] RÉSOUT ET FAIT BAISSER LA SÉVÉRITÉ
-Une réponse peut lever l'incompatibilité sans tout préciser. Si les deux implémentations
-possibles convergent désormais, résous la lacune ; si un détail secondaire reste ouvert
-(un libellé, un tri d'affichage), crée un gap de suivi en "nice_to_have" plutôt que de
-laisser la lacune d'origine ouverte."""
+Une réponse peut fermer le choix d'implémentation sans tout préciser. Si plus rien ne reste
+à trancher pour coder, résous la lacune ; si un détail secondaire reste ouvert (un libellé,
+un tri d'affichage), crée un gap de suivi en "nice_to_have" plutôt que de laisser la lacune
+d'origine ouverte."""
 
 
 # --------------------------------------------------------------------------------------
@@ -388,10 +382,10 @@ NOUVEAUX ÉLÉMENTS À ÉVALUER :
 LACUNES ORIGINALES CONCERNÉES :
 {gaps_text}
 
-CRITÈRE DE RÉSOLUTION : une lacune est résolue si, et seulement si, les deux lectures
-concurrentes qu'elle décrivait ne sont plus possibles — c'est-à-dire si un développeur peut
-désormais coder sans choisir à la place du métier. Une réponse qui reformule, qui renvoie à
-plus tard ou qui ne répond qu'à une des deux lectures ne résout pas.
+CRITÈRE DE RÉSOLUTION : une lacune est résolue si, et seulement si, ce qu'elle signalait
+comme indéterminé est désormais fixé — c'est-à-dire si un développeur peut coder sans
+choisir à la place du métier. Une réponse qui reformule, qui renvoie à plus tard ou qui ne
+traite qu'une partie du point ne résout pas.
 
 {GROUNDING_TEST}
 

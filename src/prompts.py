@@ -13,13 +13,13 @@ instead of silently replaying stale ones.
 from __future__ import annotations
 
 PROMPT_VERSIONS: dict[str, str] = {
-    # v3 : test d'ancrage (une double lecture ne compte que si les deux lectures
-    # tiennent à du texte présent), guide de catégorisation par test décisif,
-    # few-shots négatifs décrits par leur forme au lieu de citer le passage,
-    # plafond ramené à 3, et matériel des few-shots renouvelé pour ne plus
-    # recouper le jeu d'évaluation — cf. gap_finder_prompts.py.
-    "gap_finder.section": "v3",
-    "gap_finder.fresh": "v3",
+    # v4 : la « double lecture » (lecture A / lecture B) retirée du test
+    # d'ancrage, de la forme imposée, des few-shots et du critère de résolution —
+    # sur le modèle 20b qui fait tourner le graphe, la forme s'obtenait toujours
+    # et ne filtrait donc rien ; l'ancrage porte maintenant sur l'engagement du
+    # document et la description tient en 3 lignes — cf. gap_finder_prompts.py.
+    "gap_finder.section": "v4",
+    "gap_finder.fresh": "v4",
     "gap_filler.rag_grade": "v1",
     "gap_filler.question": "v1",
     "gap_filler.assumption": "v1",
