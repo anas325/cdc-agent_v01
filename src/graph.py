@@ -84,17 +84,35 @@ def ingest_node(state: CDCState) -> dict:
     every LLM context, but not synthesized into any section — the final
     validator reports them as unmapped. If no section heading is recognized,
     the whole document is kept as one item tagged with all sections.
+
+    Deuxième point d'entrée — mode « sans CDC initial » : l'auteur n'a pas de
+    document et décrit chaque section au clavier (`initial_section_texts`).
+    Le découpage est alors déjà fait, donc pas de reconnaissance de titres :
+    un ContextItem par section décrite, même statut qu'un CDC déposé (c'est
+    le texte de l'auteur) mais attribué à l'utilisateur. Les deux entrées se
+    cumulent : un brouillon partiel peut être complété à la main. Une section
+    laissée vide reste « empty » et sera construite par les questions.
     """
     settings = load_settings()
     sections = load_sections()
     ingest_source_docs()
 
     initial_text = state.get("initial_cdc_text", "") or ""
+    # Ordonné par la config, pas par le dict reçu : les ids sont des hachages de
+    # contenu, mais l'ordre des items est checkpointé et ne doit pas dépendre de
+    # l'ordre de saisie dans l'UI. Les ids inconnus sont ignorés (sections = config).
+    raw_declared = state.get("initial_section_texts") or {}
+    declared = {
+        sec.id: (raw_declared.get(sec.id) or "").strip()
+        for sec in sections
+        if (raw_declared.get(sec.id) or "").strip()
+    }
     context_items: list[ContextItem] = []
     ingest_details: dict = {}
     # The initial CDC is the author's own text: nothing was inferred, so it is
     # accepted as-is with full confidence and attributed to the system (the
-    # splitter), not to an LLM.
+    # splitter), not to an LLM — or to the user directly when they typed the
+    # section themselves rather than uploading a document.
     initial_provenance = {
         "created_by": "system",
         "timestamp": now_iso(),
@@ -148,6 +166,29 @@ def ingest_node(state: CDCState) -> dict:
             )
             ingest_details = {"matched_sections": [], "unmatched_chunks": 0}
 
+    for sid, text in declared.items():
+        context_items.append(
+            ContextItem(
+                id=stable_id("ctx", "declared", sid, text),
+                content=text,
+                source="initial_cdc",
+                section_ids=[sid],
+                turn_added=0,
+                fresh=False,
+                **{**initial_provenance, "created_by": "user"},
+            )
+        )
+    if declared:
+        ingest_details["declared_sections"] = list(declared)
+
+    if declared and not initial_text.strip():
+        ingest_summary = (
+            f"Démarrage sans CDC initial : {len(declared)} section(s) décrite(s) par l'auteur, "
+            "ingestion RAG."
+        )
+    else:
+        ingest_summary = f"Chargement du CDC initial et ingestion RAG ({len(sections)} sections)."
+
     incoming_statuses = state.get("section_statuses") or {}
     section_statuses = {}
     for section in sections:
@@ -168,7 +209,7 @@ def ingest_node(state: CDCState) -> dict:
             _log(
                 state,
                 "ingest",
-                f"Chargement du CDC initial et ingestion RAG ({len(sections)} sections).",
+                ingest_summary,
                 **ingest_details,
             )
         ],

@@ -1,10 +1,11 @@
 """Streamlit test interface for the CDC refinement agent swarm.
 
-Single-session, single-run-at-a-time debug tool: upload an initial CDC and/or
-RAG source docs, start a run, answer batched questions as they come up, and
-download the final document once the graph reaches END. All durable state
-lives in the LangGraph checkpointer (keyed by thread_id) — every rerun
-re-reads it instead of trusting in-memory globals.
+Single-session, single-run-at-a-time debug tool: upload an initial CDC (or,
+in "sans CDC initial" mode, describe each section by hand) and/or RAG source
+docs, start a run, answer batched questions as they come up, and download the
+final document once the graph reaches END. All durable state lives in the
+LangGraph checkpointer (keyed by thread_id) — every rerun re-reads it instead
+of trusting in-memory globals.
 
 Two tabs: "Pilotage" drives the run, "Sous le capot" exposes timings (from
 src.telemetry), raw gaps, the turn log, and the checkpointer snapshot.
@@ -311,26 +312,48 @@ def render_runs_history() -> None:
             st.rerun()
 
 
-def render_sidebar(settings) -> tuple[str, LoopSettings, bool, dict[str, bool]]:
+# Mode de départ. "document" = l'auteur dépose un CDC ; "guided" = il n'en a
+# pas et décrit chaque section à la main (voir render_intake_form).
+START_MODES = {
+    "document": "J'ai un CDC initial",
+    "guided": "Je n'ai pas de CDC initial",
+}
+INTAKE_KEY = "intake_section_"
+
+
+def render_sidebar(settings) -> tuple[str, str, LoopSettings, bool, dict[str, bool]]:
     st.sidebar.caption(f"Connecté : **{st.session_state.get('name', USERNAME)}**")
     authenticator.logout("Se déconnecter", location="sidebar")
     render_runs_history()
     st.sidebar.divider()
     st.sidebar.header("Configuration")
 
-    cdc_file = st.sidebar.file_uploader("CDC initial (markdown/texte/PDF)", type=["md", "txt", "pdf"])
-    cdc_text = ""
-    if cdc_file is not None:
-        st.session_state["_cdc_title"] = cdc_file.name
-        if cdc_file.name.lower().endswith(".pdf"):
-            from src.rag import extract_document_text
+    mode = st.sidebar.radio(
+        "Point de départ",
+        list(START_MODES),
+        format_func=START_MODES.get,
+        key="start_mode",
+        help="Sans document, l'assistant part de ce que tu décris section par section.",
+    )
 
-            SOURCE_DOCS_DIR.mkdir(parents=True, exist_ok=True)
-            tmp_path = SOURCE_DOCS_DIR / cdc_file.name
-            tmp_path.write_bytes(cdc_file.getvalue())
-            cdc_text = extract_document_text(tmp_path)
-        else:
-            cdc_text = cdc_file.read().decode("utf-8", errors="ignore")
+    cdc_text = ""
+    if mode == "document":
+        cdc_file = st.sidebar.file_uploader("CDC initial (markdown/texte/PDF)", type=["md", "txt", "pdf"])
+        if cdc_file is not None:
+            st.session_state["_cdc_title"] = cdc_file.name
+            if cdc_file.name.lower().endswith(".pdf"):
+                from src.rag import extract_document_text
+
+                SOURCE_DOCS_DIR.mkdir(parents=True, exist_ok=True)
+                tmp_path = SOURCE_DOCS_DIR / cdc_file.name
+                tmp_path.write_bytes(cdc_file.getvalue())
+                cdc_text = extract_document_text(tmp_path)
+            else:
+                cdc_text = cdc_file.read().decode("utf-8", errors="ignore")
+    else:
+        st.sidebar.caption(
+            "Décris chaque section dans l'onglet Pilotage, puis démarre le run."
+        )
 
     st.sidebar.subheader("Documents source (RAG)")
     source_files = st.sidebar.file_uploader(
@@ -379,17 +402,58 @@ def render_sidebar(settings) -> tuple[str, LoopSettings, bool, dict[str, bool]]:
         max_questions_per_batch=int(max_batch),
         max_questions_per_gap=int(max_per_gap),
     )
-    return cdc_text, loop_settings, start_clicked, skip_map
+    return mode, cdc_text, loop_settings, start_clicked, skip_map
 
 
-def start_run(cdc_text: str, loop_settings: LoopSettings, skip_map: dict[str, bool]) -> None:
+def render_intake_form(sections, expanded: bool) -> dict[str, str]:
+    """Mode « sans CDC initial » : l'auteur décrit lui-même chaque section.
+
+    Ce qu'il écrit ici tient lieu de CDC initial — même statut, même découpage
+    par section —, mais déjà rangé : `ingest_node` n'a aucun titre à
+    reconnaître. Les sections restent de la config, jamais du code : le
+    formulaire se construit à partir de sections.yaml.
+
+    Les widgets sont keyed, donc leurs valeurs survivent aux reruns et sont
+    lisibles au moment où le bouton « Démarrer » (barre latérale) est cliqué.
+    """
+    with st.expander("Décrire le projet section par section", expanded=expanded):
+        st.caption(
+            "Pas de document ? Décris librement chaque section, même en une ou deux phrases. "
+            "L'assistant part de là, puis pose des questions pour combler le reste. "
+            "Une section laissée vide est entièrement construite par les questions."
+        )
+        for sec in sections:
+            label = sec.title if sec.required else f"{sec.title} (optionnelle)"
+            st.text_area(
+                label,
+                key=f"{INTAKE_KEY}{sec.id}",
+                height=120,
+                placeholder=sec.description,
+                help=" · ".join(sec.completion_hints) or None,
+            )
+    return {sec.id: st.session_state.get(f"{INTAKE_KEY}{sec.id}", "") or "" for sec in sections}
+
+
+def start_run(
+    cdc_text: str,
+    section_texts: dict[str, str],
+    loop_settings: LoopSettings,
+    skip_map: dict[str, bool],
+) -> None:
     st.session_state.thread_id = str(uuid.uuid4())
     st.session_state.pending_questions = None
     st.session_state.finished = False
     st.session_state.step_timeline = []
     telemetry.reset(st.session_state.thread_id)
 
-    title = st.session_state.get("_cdc_title") or f"Run {st.session_state.thread_id[:8]}"
+    fallback_title = f"Run {st.session_state.thread_id[:8]}"
+    if cdc_text:
+        title = st.session_state.get("_cdc_title") or fallback_title
+    else:
+        # Pas de nom de fichier en mode guidé : le début de la première section
+        # décrite reste reconnaissable dans « Mes runs ».
+        first = next((" ".join(t.split()) for t in section_texts.values() if t.strip()), "")
+        title = f"Sans CDC : {first[:40]}" if first else fallback_title
     try:
         db.create_run(st.session_state.thread_id, USERNAME, title)
     except Exception as exc:  # noqa: BLE001 - surfaced but non-fatal for the run
@@ -403,6 +467,7 @@ def start_run(cdc_text: str, loop_settings: LoopSettings, skip_map: dict[str, bo
     }
     input_state = {
         "initial_cdc_text": cdc_text,
+        "initial_section_texts": section_texts,
         "loop_settings": loop_settings,
         "section_statuses": section_statuses,
     }
@@ -962,18 +1027,30 @@ def main() -> None:
 "Il analyse le document pour identifier les informations manquantes, les ambiguïtés et les incohérences, puis propose des"
 " améliorations ou pose des questions ciblées pour clarifier les besoins. À la fin, il génère un cahier des charges structuré"
 " et prêt à être transmis à une équipe de développement, accompagné d'un rapport de vérification.")
-    cdc_text, loop_settings, start_clicked, skip_map = render_sidebar(settings)
+    mode, cdc_text, loop_settings, start_clicked, skip_map = render_sidebar(settings)
 
     tab_run, tab_debug = st.tabs([":material/play_arrow: Pilotage", ":material/build: Sous le capot"])
 
     # The run must execute inside the Pilotage tab so its st.status timeline
     # renders there rather than at the top of the page.
     with tab_run:
+        # Rendu avant le démarrage : les text_area écrivent leurs valeurs dans
+        # session_state à l'affichage, donc ce qui est collecté ici est bien ce
+        # que l'auteur voit à l'écran. Replié une fois un run ouvert, mais
+        # toujours accessible pour en préparer un nouveau.
+        section_texts: dict[str, str] = {}
+        if mode == "guided":
+            section_texts = render_intake_form(load_sections(), expanded=not st.session_state.thread_id)
+
         if start_clicked:
-            start_run(cdc_text, loop_settings, skip_map)
+            start_run(cdc_text, section_texts, loop_settings, skip_map)
 
         if not st.session_state.thread_id:
-            st.info("Charge un CDC initial (optionnel) et clique sur Démarrer dans la barre latérale.")
+            st.info(
+                "Décris les sections ci-dessus puis clique sur Démarrer dans la barre latérale."
+                if mode == "guided"
+                else "Charge un CDC initial (optionnel) et clique sur Démarrer dans la barre latérale."
+            )
             values = {}
         else:
             values = get_state_values()

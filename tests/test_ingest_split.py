@@ -70,3 +70,61 @@ def test_ingest_unstructured_doc_falls_back_to_whole_doc_item():
 def test_ingest_empty_text_creates_no_items():
     result = graph.ingest_node({"initial_cdc_text": "  \n "})
     assert result["context_items"] == []
+# --- Mode « sans CDC initial » : l'auteur décrit chaque section lui-même -----
+
+
+def test_declared_sections_become_one_item_each():
+    result = graph.ingest_node(
+        {"initial_section_texts": {"problem": "Le stock est suivi sur papier.", "functional": "Saisie mobile."}}
+    )
+    items = result["context_items"]
+    assert [it.section_ids for it in items] == [["problem"], ["functional"]]
+    assert [it.content for it in items] == ["Le stock est suivi sur papier.", "Saisie mobile."]
+    # Même statut qu'un CDC déposé, mais attribué à l'auteur, pas au découpeur.
+    assert all(it.source == "initial_cdc" and it.created_by == "user" for it in items)
+    assert all(it.confidence == 1.0 and it.validation_status == "accepted" for it in items)
+    assert all(not it.fresh and it.turn_added == 0 for it in items)
+    assert result["turn_log"][0].details["declared_sections"] == ["problem", "functional"]
+
+
+def test_declared_sections_are_ordered_by_config_not_by_input():
+    """L'ordre des items est checkpointé : il ne doit pas suivre l'ordre de saisie."""
+    result = graph.ingest_node(
+        {"initial_section_texts": {"functional": "Saisie mobile.", "problem": "Suivi papier."}}
+    )
+    assert [it.section_ids[0] for it in result["context_items"]] == ["problem", "functional"]
+
+
+def test_declared_sections_ignore_blanks_and_unknown_ids():
+    result = graph.ingest_node(
+        {"initial_section_texts": {"problem": "Suivi papier.", "functional": "   ", "inexistante": "Texte."}}
+    )
+    items = result["context_items"]
+    assert [it.section_ids for it in items] == [["problem"]]
+    assert result["turn_log"][0].details["declared_sections"] == ["problem"]
+    # Toutes les sections gardent un statut, y compris celles laissées vides.
+    assert set(result["section_statuses"]) == {"problem", "functional"}
+    assert result["section_statuses"]["functional"].status == "empty"
+
+
+def test_declared_sections_and_uploaded_doc_are_cumulative():
+    """Un brouillon partiel peut être complété à la main : rien n'est écrasé."""
+    doc = """## Contexte
+Texte contexte.
+"""
+    result = graph.ingest_node(
+        {"initial_cdc_text": doc, "initial_section_texts": {"functional": "Saisie mobile."}}
+    )
+    items = result["context_items"]
+    assert [it.section_ids for it in items] == [["problem"], ["functional"]]
+    details = result["turn_log"][0].details
+    assert details["matched_sections"] == ["problem"]
+    assert details["declared_sections"] == ["functional"]
+
+
+def test_no_input_at_all_still_yields_a_usable_state():
+    """Mode guidé sans un mot saisi : la boucle démarre sur des sections vides."""
+    result = graph.ingest_node({})
+    assert result["context_items"] == []
+    assert set(result["section_statuses"]) == {"problem", "functional"}
+    assert result["gaps"] == []

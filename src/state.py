@@ -204,6 +204,10 @@ class CDCState(TypedDict, total=False):
     turn_log: Annotated[list[TurnLogEntry], operator.add]
     decision_log: Annotated[list[DecisionLogEntry], operator.add]
     initial_cdc_text: str
+    # Mode « sans CDC initial » : l'auteur décrit lui-même chaque section au
+    # lieu de déposer un document. section_id -> texte libre, consommé par
+    # ingest_node au même titre que initial_cdc_text.
+    initial_section_texts: dict[str, str]
     stop_reason: str | None
     current_mode: Literal["fresh", "section"]
     active_fresh_item_ids: list[str]
