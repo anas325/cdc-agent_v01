@@ -412,6 +412,28 @@ def pending_questions(graph, config) -> list[dict] | None:
     return None
 
 
+def telemetry_snapshot() -> dict:
+    """`telemetry.summary()`, plus le détail par appel LLM.
+
+    Les agrégats par schéma suffisent au rapport de run, mais la distribution
+    des durées ne survit nulle part ailleurs à la fin du processus : les
+    figures de `evals/metrics/` la lisent ici.
+    """
+    snapshot = telemetry.summary()
+    snapshot["calls"] = [
+        {
+            "node": call.node,
+            "schema": call.schema,
+            "duration_s": round(call.duration_s, 3),
+            "attempts": call.attempts,
+            "ok": call.ok,
+            "cache_hit": call.cache_hit,
+        }
+        for call in telemetry.llm_calls()
+    ]
+    return snapshot
+
+
 def merge_telemetry(summaries: list[dict]) -> dict:
     """Sum telemetry.summary() across the processes a case ran in.
 
@@ -447,6 +469,10 @@ def merge_telemetry(summaries: list[dict]) -> dict:
         for slot in merged[group].values():
             slot["mean_s"] = slot["total_s"] / slot["count"] if slot["count"] else 0.0
             slot["share"] = slot["total_s"] / total if total else 0.0
+
+    calls = [call for summary in summaries for call in (summary.get("calls") or [])]
+    if calls:
+        merged["calls"] = calls
 
     merged["llm_share_of_compute"] = (
         merged["llm_s"] / merged["compute_s"] if merged["compute_s"] else 0.0
@@ -528,7 +554,7 @@ def run_case(case: BenchmarkCase, *, simulator, loop_settings: LoopSettings,
                 )
                 progress_node(node, values, runs[-1].duration_s if runs else None)
             recorder.record_state(values)
-            recorder.record_telemetry(telemetry.summary())
+            recorder.record_telemetry(telemetry_snapshot())
         except OSError as exc:  # a full disk must not kill a run that can still finish
             print(f"    (écriture de progression échouée : {exc})", file=sys.stderr)
 
@@ -586,7 +612,7 @@ def run_case(case: BenchmarkCase, *, simulator, loop_settings: LoopSettings,
             "started_at": started_at,
             "wall_s": round(time.perf_counter() - started, 2),
             "status": status,
-            "telemetry": telemetry.summary(),
+            "telemetry": telemetry_snapshot(),
         }
         if recorder is not None:
             recorder.record_segment(segment)
