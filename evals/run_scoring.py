@@ -499,6 +499,10 @@ def score_run(results_root: Path, *, case_ids: list[str] | None = None,
         # Copied from the run so two scores.json files can be compared without
         # going back for their manifests (roadmap Phase 6's regression reports).
         "run_id": manifest.get("run_id", results_root.name),
+        # Which system produced the run: the graph, or the reference
+        # implementation in evals/baseline.py. Only the latter says so in
+        # its manifest, so absence means the graph.
+        "system": manifest.get("system", "graph"),
         "dataset_version": manifest.get("dataset_version"),
         "git_commit": manifest.get("git_commit"),
         "simulator_mode": manifest.get("simulator_mode"),

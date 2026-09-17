@@ -32,6 +32,8 @@ uv run python evals/run_benchmark.py --cases cdc_003_ecommerce --cache   # one c
 uv run python evals/run_benchmark.py --resume                            # continue the last run
 uv run python evals/run_scoring.py               # score the last run against ground truth
 uv run python evals/run_scoring.py --run <run_id> --judge llm            # + LLM question judge
+uv run python evals/run_baseline.py --score      # simple reference system, same dataset
+uv run python evals/compare_runs.py <base_run> <bench_run>               # side-by-side deltas
 ```
 
 There is no linter/formatter configured. Match the surrounding style (`from __future__
@@ -136,6 +138,15 @@ CDC-internal ones; and `predictions.json` carries `decision_log` because RAG ran
 order lives nowhere else (a *rejected* retrieval leaves no `ContextItem`, only a
 `rag_rejected` entry with `evidence_ids`). Question quality is deterministic by
 default; `--judge llm` adds an LLM rubric beside it, never merged into it.
+
+`run_baseline.py` runs a fourth thing, and it is not a harness: `evals/baseline.py`
+is a **reference system** — one LLM call for every gap and its question, retrieval
+measured but never trusted to close a gap, one undeduplicated question batch, naive
+integration. It writes the same record shape into the same directory layout, so
+`run_scoring.py` reads it unchanged, and `compare_runs.py` diffs two `scores.json`
+files without recomputing anything. It exists so a score has a floor: keep it
+deliberately simple, and keep sharing infrastructure (`call_structured`, the model
+config, the per-case Chroma index) so the comparison isolates the architecture.
 
 **The benchmark is resumable, so nothing is buffered until the end.** Every artifact
 goes through `write_atomic` and is written as it happens — the graph checkpoint after

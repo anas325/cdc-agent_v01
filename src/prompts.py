@@ -35,6 +35,10 @@ PROMPT_VERSIONS: dict[str, str] = {
     # during batch evaluation (evals/simulator.py). Registered here so its calls
     # are versioned and cached like every other prompt.
     "simulator.answer": "v1",
+    # Not a graph agent either: the one-shot prompt behind evals/baseline.py,
+    # the simple reference system the benchmark compares the graph against.
+    # It is a *baseline* — resist improving its wording to make it competitive.
+    "baseline.oneshot": "v1",
     # Also not a graph agent: the optional LLM judge that rates question quality
     # during scoring (evals/scoring.py, `run_scoring.py --judge llm`). It never
     # feeds the run — it only grades one after the fact.

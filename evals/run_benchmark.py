@@ -732,9 +732,9 @@ def summarize(record: dict) -> dict:
     return row
 
 
-def render_report(manifest: dict, rows: list[dict]) -> str:
+def render_report(manifest: dict, rows: list[dict], title: str = "Benchmark run report") -> str:
     lines = [
-        "# Benchmark run report",
+        f"# {title}",
         "",
         f"- run_id: `{manifest['run_id']}`",
         f"- dataset: `{manifest['dataset_version']}` ({len(rows)} case(s))",
@@ -803,11 +803,13 @@ def render_report(manifest: dict, rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def write_report(path: Path, manifest: dict, rows: list[dict]) -> None:
-    write_atomic(path, render_report(manifest, rows))
+def write_report(path: Path, manifest: dict, rows: list[dict],
+                 title: str = "Benchmark run report") -> None:
+    write_atomic(path, render_report(manifest, rows, title))
 
 
-def flush_run_outputs(results_root: Path, manifest: dict, rows: list[dict]) -> None:
+def flush_run_outputs(results_root: Path, manifest: dict, rows: list[dict],
+                      title: str = "Benchmark run report") -> None:
     """Rewrite the run-level artifacts. Called after *every* case, not just the last.
 
     Whole-file rewrites are fine because write_atomic never leaves a partial file
@@ -821,7 +823,7 @@ def flush_run_outputs(results_root: Path, manifest: dict, rows: list[dict]) -> N
     writer.writeheader()
     writer.writerows(rows)
     write_atomic(results_root / "summary.csv", buffer.getvalue())
-    write_report(results_root / "report.md", manifest, rows)
+    write_report(results_root / "report.md", manifest, rows, title)
 
 
 # ---------------------------------------------------------------------------

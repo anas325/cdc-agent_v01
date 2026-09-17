@@ -517,3 +517,97 @@ commit git, fournisseur / modèle, mode et graine du simulateur, `PROMPT_VERSION
 donc sans retourner chercher leurs manifests — c'est le point d'accroche des
 rapports de régression de la phase 6. `scorer_version` se bump dès qu'un même run
 produirait des chiffres différents.
+
+---
+
+## Le système de référence (« baseline »)
+
+Le benchmark dit à quel point le graphe s'en sort. Il ne dit pas si **la
+machinerie vaut ce qu'elle coûte** : un F1 de lacunes à 0,55 est bon ou mauvais
+selon ce qu'un unique appel LLM aurait obtenu sur les mêmes CDC. `evals/baseline.py`
+est cet unique appel, branché sur le même jeu de données, la même partie prenante
+synthétique et le même scorer.
+
+```text
+run_baseline.py   ->  evals/results/base_<ts>/   (même arborescence qu'un run de benchmark)
+run_benchmark.py  ->  evals/results/bench_<ts>/
+        |                      |
+        +------ run_scoring.py (inchangé) ------+
+                               |
+                               v
+                       compare_runs.py  ->  comparison.md
+```
+
+### Ce que fait la baseline
+
+1. **Une passe.** Le CDC entier et la liste des sections partent dans un seul
+   `call_structured`, qui renvoie toutes les lacunes qu'il voit, chacune avec sa
+   question déjà rédigée. Pas de sections, pas de tours, pas d'orchestrateur.
+2. **Une récupération mesurée mais non exploitée.** Une requête top-k par lacune,
+   journalisée avec ses rangs — Recall@K est donc mesuré sur le même index que
+   pour le graphe — mais la lacune part quand même en question. Décider qu'un
+   extrait *répond* à une lacune, c'est l'appel de notation de `gap_filler` ; une
+   baseline qui le ferait aussi mesurerait un composant du graphe au lieu de lui
+   servir de plancher. Le prix de ne pas le faire est justement le chiffre que
+   cela rend visible : chaque question que le RAG aurait pu éviter est posée.
+3. **Un seul lot de questions.** Toutes les lacunes ouvertes d'un coup, sans
+   déduplication ni budget.
+4. **Une intégration naïve.** Une réponse referme sa lacune, un « je ne sais pas »
+   devient une hypothèse. Rien n'est confronté à rien : aucune contradiction ne
+   peut être trouvée après la première passe.
+
+`--rag-closes-gaps` active l'autre option naïve — faire confiance au score de
+similarité au-dessus d'un plancher. Sur ce jeu de données ce n'est pas une vraie
+alternative, et le run le montre : les scores se tiennent dans une bande étroite
+(~0,55–0,65 sur le cas ecommerce), donc n'importe quel plancher referme toutes
+les lacunes ou aucune. C'est en soi un résultat : la similarité seule ne porte
+aucun signal sur « cet extrait répond-il à cette lacune ? ».
+
+### Ce qu'elle partage avec le graphe, volontairement
+
+`call_structured`, la configuration fournisseur/modèle, l'index RAG du cas, et
+les mêmes enregistrements `Gap` / `ContextItem` / `DecisionLogEntry` avec les
+mêmes ids à hash de contenu. La comparaison isole donc **l'architecture**, pas le
+modèle ni la plomberie. Son prompt est enregistré sous `baseline.oneshot` dans
+`src/prompts.py` : c'est un plancher, résister à l'envie d'en améliorer la
+formulation pour la rendre compétitive.
+
+Une seule différence de forme mérite d'être connue : la baseline ne découpe pas
+le CDC par section, elle le dépose en un bloc non étiqueté. `scoring._InitialCdc`
+lit alors le document entier comme pool de contexte pour `has_context`, lecture
+légèrement **généreuse** — le biais joue contre le système testé, pas pour lui.
+
+```bash
+uv run python evals/run_baseline.py --score          # les dix cas, puis notation
+uv run python evals/run_baseline.py --cases cdc_003_ecommerce --cache
+uv run python evals/run_baseline.py --no-rag         # sans récupération du tout
+```
+
+Elle est très bon marché comparée au benchmark — un appel LLM par cas plus ceux
+de la partie prenante, contre des centaines pour le graphe — donc pas de
+checkpoint ni de reprise en cours de cas ; `--resume` ne fait que sauter les cas
+déjà écrits.
+
+### Comparer deux runs notés
+
+```bash
+uv run python evals/compare_runs.py base_20260914_101500 bench_20260914_120000
+```
+
+Lit les deux `scores.json` et écrit `comparison.md` à côté du second. Rien n'y est
+recalculé : un écart n'est jamais que la différence de deux nombres que le scorer
+a déjà produits, ce qui garde la comparaison honnête quand le scorer change — on
+renote les deux runs et l'écart bouge des deux côtés à la fois.
+
+Le premier run est la **référence** (la baseline), le second le **candidat** (le
+système testé) : un écart positif veut donc dire que le candidat est devant, sauf
+sur les métriques marquées `↓` où moins vaut mieux. La ligne de verdict compte
+les victoires sur quatre métriques seulement (F1 des lacunes, rappel des lacunes
+bloquantes, couverture de la vérité terrain, qualité des questions) plutôt que de
+moyenner des pourcentages avec des notes sur 2, ce qui produirait un chiffre
+précis et vide de sens.
+
+L'outil **refuse** une paire non comparable — versions de jeu de données, modes
+de simulateur, modèles ou versions de scorer différents — parce qu'un écart entre
+ces deux-là ne mesurerait rien. `--force` l'affiche quand même, avec les
+divergences listées au-dessus du tableau.

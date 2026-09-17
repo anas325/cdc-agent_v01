@@ -795,4 +795,6 @@ def build_graph(checkpointer=None):
     graph.add_edge("synthesizer", "final_validator")
     graph.add_edge("final_validator", END)
 
-    return graph.compile(checkpointer=checkpointer or MemorySaver())
+    return graph.compile(
+        #checkpointer=checkpointer or 
+        MemorySaver())
